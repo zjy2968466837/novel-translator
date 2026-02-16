@@ -47,6 +47,8 @@ a = Analysis(
     datas=[
         # Flet 桌面客户端 (flet.exe + DLLs + data)
         (FLET_DESKTOP_APP, "flet_desktop/app"),
+        # Flet 资源文件 (icons.json 等)
+        (os.path.join(SITE_PACKAGES, "flet"), "flet"),
         # novel_translator 包源码 (显式打包，解决 src layout 兼容性问题)
         (os.path.join(SRC_DIR, "novel_translator"), "novel_translator"),
         # 示例术语表

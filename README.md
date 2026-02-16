@@ -24,7 +24,22 @@
 
 ---
 
-## 📦 安装
+## � 快速开始（免安装）
+
+**Windows 用户** 可直接下载开箱即用的发行包，无需安装 Python 或任何依赖：
+
+1. 前往 [Releases](https://github.com/zjy2968466837/novel-translator/releases) 页面
+2. 下载最新的 `NovelTranslator-v3.0.0-win-x64.zip`（约 57 MB）
+3. 解压到任意目录
+4. 双击 `NovelTranslator.exe` 即可启动 GUI
+
+> 💡 首次启动可能需要数秒加载，请耐心等待窗口出现。
+> 
+> 📋 解压目录下附带了 `glossary_example.json` 示例术语表供参考。
+
+---
+
+## 📦 从源码安装
 
 ### 环境要求
 
@@ -131,6 +146,9 @@ novel-translator/
 │   └── glossary_example.json
 ├── pyproject.toml
 ├── requirements.txt
+├── launcher.py              # PyInstaller 打包入口
+├── novel_translator.spec    # PyInstaller 配置
+├── build.bat                # Windows 一键构建脚本
 ├── LICENSE
 ├── .gitignore
 └── README.md
@@ -159,13 +177,24 @@ novel-translator/
 ### 翻译修复
 
 1. **质量扫描**：在断点文件中搜索指定关键词（如 "前辈" "米娅"），定位问题章节
-2. **选择性重翻**：仅重新翻译有问题的章节，使用最新的术语表和提示词
-
 ---
 
+## 📦 构建发行包
 
+如需自行构建 Windows 可执行程序：
 
+```bash
+# 方式一：运行构建脚本
+build.bat
 
+# 方式二：手动执行
+pip install pyinstaller
+pyinstaller novel_translator.spec --noconfirm
+```
+
+构建完成后，发行文件位于 `dist/NovelTranslator/` 目录。将该文件夹压缩为 zip 即可分发。
+
+---
 
 ## 📄 许可证
 

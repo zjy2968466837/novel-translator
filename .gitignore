@@ -9,6 +9,11 @@ dist/
 build/
 *.egg-info/
 *.egg
+*.spec.bak
+
+# PyInstaller
+*.manifest
+*.log
 
 # Virtual environments
 .venv/

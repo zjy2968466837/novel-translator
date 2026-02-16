@@ -1,0 +1,45 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project runtime files (user-specific)
+translator_config.json
+translator_history.json
+*.checkpoint.json
+
+# Sensitive
+.env
+*.env
+
+# Novel files (do not commit actual novels)
+*.epub
+*.mobi
+novel_translated*.txt
+novel_translated*.md
+
+# Backup files
+*_backup.py

@@ -1,8 +1,8 @@
 # 📖 Novel Translator — 日文轻小说 AI 翻译器
 
-将日文轻小说（EPUB 格式）翻译为流畅地道的中文，支持 **命令行** 与 **图形界面** 双模式。
+开箱即用（自备api）将日文轻小说（EPUB 格式）翻译为的中文，支持 **命令行** 与 **图形界面** 双模式。
 
-基于 OpenAI 兼容 API（DeepSeek / Qwen / GPT 等），内置针对轻小说翻译深度调优的提示词系统。
+基于 OpenAI 兼容 API（DeepSeek / Qwen / GPT 等），内置deepseek提示词。
 
 ---
 

@@ -35,7 +35,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/novel-translator.git
+git clone https://github.com/zjy2968466837/novel-translator.git
 cd novel-translator
 
 # 创建虚拟环境（推荐）

@@ -43,9 +43,9 @@ cli = [
 novel-translator = "novel_translator.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/your-username/novel-translator"
-Repository = "https://github.com/your-username/novel-translator"
-Issues = "https://github.com/your-username/novel-translator/issues"
+Homepage = "https://github.com/zjy2968466837/novel-translator"
+Repository = "https://github.com/zjy2968466837/novel-translator"
+Issues = "https://github.com/zjy2968466837/novel-translator/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

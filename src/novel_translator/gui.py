@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 novel_translator.gui - Flet 图形界面 v3.0
 

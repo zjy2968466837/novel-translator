@@ -13,28 +13,46 @@ import os
 import sys
 import importlib
 
+# ===== 强制 UTF-8 模式（解决中文 Windows 编码问题）=====
+os.environ['PYTHONUTF8'] = '1'
+
+# ===== 关键: 优先使用预编译目录 _build_src，回退到 src =====
+BUILD_SRC = os.path.join(os.path.abspath("."), "_build_src")
+SRC_DIR = os.path.join(os.path.abspath("."), "src")
+# _build_src 优先（预编译的 .pyc 避免编码问题）
+SEARCH_PATHS = [p for p in [BUILD_SRC, SRC_DIR] if os.path.isdir(p)]
+for p in SEARCH_PATHS:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 # ===== 路径 =====
 SITE_PACKAGES = os.path.dirname(importlib.import_module("flet").__file__)
 SITE_PACKAGES = os.path.dirname(SITE_PACKAGES)  # 上级 site-packages
 
 FLET_DESKTOP_APP = os.path.join(SITE_PACKAGES, "flet_desktop", "app")
 
+# novel_translator 的所有子模块（显式列出，避免 collect_submodules 在 src 布局下的兼容性问题）
+nt_hiddenimports = [
+    'novel_translator',
+    'novel_translator.engine',
+    'novel_translator.gui',
+    'novel_translator.cli',
+]
+
 # ===== 分析 =====
 a = Analysis(
     ["launcher.py"],
-    pathex=["src"],
+    pathex=SEARCH_PATHS,
     binaries=[],
     datas=[
         # Flet 桌面客户端 (flet.exe + DLLs + data)
         (FLET_DESKTOP_APP, "flet_desktop/app"),
+        # novel_translator 包源码 (显式打包，解决 src layout 兼容性问题)
+        (os.path.join(SRC_DIR, "novel_translator"), "novel_translator"),
         # 示例术语表
         ("examples", "examples"),
     ],
-    hiddenimports=[
-        "novel_translator",
-        "novel_translator.engine",
-        "novel_translator.gui",
-        "novel_translator.cli",
+    hiddenimports=nt_hiddenimports + [
         # Flet 核心
         "flet",
         "flet.auth",
@@ -90,7 +108,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,           # 无控制台窗口
+    console=False,           # 发行模式：隐藏控制台
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

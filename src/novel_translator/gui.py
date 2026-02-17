@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-novel_translator.gui - Flet 图形界面 v1.0.1
+novel_translator.gui - Flet 图形界面
 
 功能:
 - 多 AI 提供商支持 (OpenAI兼容 / Anthropic / Google / Ollama)
@@ -21,6 +21,7 @@ import threading
 
 import flet as ft
 
+from novel_translator import __version__
 from novel_translator.engine import TranslatorEngine, TranslationConfig
 from novel_translator.providers import (
     PROVIDER_PRESETS, get_provider_names, get_provider_models,
@@ -28,7 +29,7 @@ from novel_translator.providers import (
 )
 
 APP_TITLE = "轻小说翻译器"
-APP_VERSION = "1.0.1"
+APP_VERSION = __version__
 CONFIG_FILE = "translator_config.json"
 HISTORY_FILE = "translator_history.json"
 
@@ -105,63 +106,6 @@ STYLE_CATEGORIES = {
                 "13. 术语前后一致：同一专有名词全文必须使用完全相同的译名和标记格式。\n"
                 "14. 标记统一：专有名词一律使用「」标记，不得混用『』《》【】等。\n\n"
                 "翻译风格：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
-            ),
-        },
-    },
-    "通用风格": {
-        "意译流畅": {
-            "desc": "在忠实原意的基础上更注重中文表达的流畅度和可读性",
-            "temperature": 0.85,
-            "top_p": 0.92,
-            "frequency_penalty": 0.15,
-            "presence_penalty": 0.05,
-            "prompt": (
-                "你是一位精通中日文化的专业轻小说翻译专家。"
-                "请将日文异世界转生小说片段翻译成流畅、地道、富有表现力的中文。\n\n"
-                "核心原则：\n"
-                "1. 忠于原意：准确传达原文含义和作者意图，可适当调整语序使中文更自然，但不得添加原文没有的名词或修饰语。\n"
-                "2. 自然表达：使用地道的中文表达习惯，避免翻译腔。\n"
-                "3. 适度语气：可在对话中保留适量语气词，但不过度添加，需与原文情感一致。"
-                "禁止滥用\u201c呀\u201d\u201c呢\u201d\u201c嘛\u201d\u201c哦\u201d\u201c啦\u201d等。\n"
-                "4. 保留世界观：完整保留异世界设定的专有名词和体系。\n"
-                "5. 角色个性：通过用词和句式体现不同角色的性格特征，但不要过度演绎。\n"
-                "6. 段落与断句：对话使用「」或\u201c\u201d。语意连贯的相邻短句合并为流畅长句，不要逐句机械断行；"
-                "仅在话题转换、场景切换或原文明确分段处另起新段。\n"
-                "7. 严格遵守术语表。\n"
-                "8. 语体适配：第一人称内心独白和日常对话使用现代口语体，禁用文言或过度书面化措辞。\n"
-                "9. 时态准确：阐述世界观设定时使用一般时态，不要误用\u201c了\u201d。\n"
-                "10. 日文拟态词应译为对应感觉的中文表达，不可擅自补充具体名词。\n"
-                "11. 纯净输出：只输出翻译正文，严禁输出翻译注释、译者注、脚注、说明文字、括号补充解释。\n"
-                "12. 术语前后一致：同一专有名词全文必须使用完全相同的译名和标记格式。\n"
-                "13. 标记统一：专有名词一律使用「」标记，不得混用『』《》【】等。\n\n"
-                "风格：在忠于原文的前提下，像为中文读者重新讲述这个故事，语句连贯流畅。\n"
-            ),
-        },
-        "文学翻译": {
-            "desc": "追求文学性和艺术感，适合注重文字优美度的读者",
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "frequency_penalty": 0.2,
-            "presence_penalty": 0.1,
-            "prompt": (
-                "你是一位兼具文学素养和翻译功底的资深轻小说翻译家。"
-                "请将日文异世界转生小说片段翻译成优美、富有文学感的中文。\n\n"
-                "核心原则：\n"
-                "1. 传达原意：忠实传达原文的含义、情感和氛围，不得凭空添加原文没有的名词或修饰语。\n"
-                "2. 文学表达：追求中文表达的优美和韵律感，可使用适当的修辞手法，但不得偏离原意。\n"
-                "3. 氛围营造：注重场景描写的画面感和情感渲染。\n"
-                "4. 角色塑造：通过语言风格鲜明地展现不同角色的个性，但不要过度演绎。\n"
-                "5. 保留世界观元素，术语译名优先使用术语表。\n"
-                "6. 段落与断句：对话使用「」或\u201c\u201d。语意连贯的短句合并为流畅长句，不要机械断行；"
-                "仅在话题转换或场景切换处另起新段。\n"
-                "7. 语体适配：第一人称内心独白用现代口语体，正式场合或古风角色可用相应文体。"
-                "避免在日常叙述中滥用文言措辞。\n"
-                "8. 时态准确：阐述世界观设定时使用一般时态，叙述已发生事件时正常使用\u201c了\u201d。\n"
-                "9. 日文拟态词应译为对应感觉的中文表达，不可擅自补充具体名词。\n"
-                "10. 纯净输出：只输出翻译正文，严禁输出翻译注释、译者注、脚注、说明文字、括号补充解释。\n"
-                "11. 术语前后一致：同一专有名词全文必须使用完全相同的译名和标记格式。\n"
-                "12. 标记统一：专有名词一律使用「」标记，不得混用『』《》【】等。\n\n"
-                "风格：文笔优美，有中文小说的阅读质感，语句连贯流畅，忠于原作精神。\n"
             ),
         },
     },
@@ -249,7 +193,7 @@ def _add_to_history(hist, key, value, max_items=10):
 # 主界面
 # =========================================================
 def main(page: ft.Page):
-    page.title = f"{APP_TITLE} v{APP_VERSION}"
+    page.title = APP_TITLE
     page.theme_mode = ft.ThemeMode.SYSTEM
     page.padding = 0
     page.window.width = 1200
@@ -433,9 +377,9 @@ def main(page: ft.Page):
             )
         # Ollama 不需要 API Key
         if provider_key == "ollama":
-            api_key_field.helper_text = "Ollama 本地模式，API Key 可留空"
+            api_key_field.hint_text = "Ollama 本地模式，API Key 可留空"
         else:
-            api_key_field.helper_text = None
+            api_key_field.hint_text = None
         page.update()
         save_ui_config()
 
@@ -977,7 +921,7 @@ def main(page: ft.Page):
         password=True, can_reveal_password=True,
         value=saved.get("api_key", ""),
         border_radius=10, filled=True, on_blur=_on_field_blur,
-        helper_text="Ollama 本地模式，API Key 可留空" if saved.get("provider") == "ollama" else None,
+        hint_text="Ollama 本地模式，API Key 可留空" if saved.get("provider") == "ollama" else None,
     )
     api_url_field = ft.TextField(
         label="API 地址", prefix_icon=ft.Icons.LINK,

@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec 文件 — Novel Translator v1.0.1
+PyInstaller spec 文件 — Novel Translator
 
 生成方式:
   pyinstaller novel_translator.spec

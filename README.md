@@ -30,7 +30,7 @@
 **Windows 用户** 可直接下载开箱即用的发行包，无需安装 Python 或任何依赖：
 
 1. 前往 [Releases](https://github.com/zjy2968466837/novel-translator/releases) 页面
-2. 下载最新的 `NovelTranslator-v1.0.1-win-x64.zip`（约 60 MB）
+2. 下载最新的 `NovelTranslator-win-x64.zip`（约 60 MB）
 3. 解压到任意目录
 4. 双击 `NovelTranslator.exe` 即可启动 GUI
 

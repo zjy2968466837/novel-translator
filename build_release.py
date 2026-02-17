@@ -86,8 +86,7 @@ def create_release_zip():
         shutil.copy2(glossary_src, os.path.join(dist_dir, "glossary_example.json"))
 
     # 创建 zip
-    from novel_translator import __version__
-    zip_name = f"NovelTranslator-v{__version__}-win-x64"
+    zip_name = "NovelTranslator-win-x64"
     zip_path = os.path.join(PROJECT_ROOT, "dist", zip_name)
     shutil.make_archive(zip_path, "zip", dist_dir)
 

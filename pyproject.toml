@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "novel-translator"
-version = "1.0.1"
+version = "1.0.2"
 description = "日文轻小说 AI 翻译工具 — EPUB 日文→中文翻译器，支持多 AI 提供商 / CLI / GUI 双模式"
 readme = "README.md"
 license = "MIT"

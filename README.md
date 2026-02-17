@@ -2,7 +2,7 @@
 
 开箱即用（自备api）将日文轻小说（EPUB 格式）翻译为的中文，支持 **命令行** 与 **图形界面** 双模式。
 
-基于 OpenAI 兼容 API（DeepSeek / Qwen / GPT 等），内置deepseek提示词。
+支持多种 AI 提供商：OpenAI 兼容（DeepSeek / Qwen / GPT / SiliconFlow）、Anthropic (Claude)、Google (Gemini)、Ollama 本地模型。
 
 ---
 
@@ -10,14 +10,15 @@
 
 | 功能 | 说明 |
 |------|------|
-| 📗 EPUB 解析 | 自动提取章节、排序、清洗 HTML |
+| 🌐 多提供商 | OpenAI兼容 / Anthropic Claude / Google Gemini / Ollama 本地 |
+| 📗 EPUB 解析 | 自动提取章节、保留图片和样式结构 |
 | 🔄 双模型支持 | Chat 模型 + Completion 模型自动检测 |
 | 📋 整章翻译 | 可选将整章作为一个整体发送，消除跨分块不一致 |
 | 🔗 上下文注入 | 将前文翻译结果注入后续请求，保持人名术语一致 |
 | ⚡ 并发翻译 | 多线程并发加速，支持 1~128 线程 |
 | 💾 断点续传 | 实时保存进度，中断后自动跳过已完成章节 |
 | 📖 术语表 | JSON 格式术语表，强制统一专有名词译名 |
-| 📦 双格式输出 | 支持 TXT 纯文本 和 EPUB 电子书输出 |
+| 📦 EPUB 输出 | 保留原始 CSS/图片/字体，翻译后样式不丢失 |
 | 🎨 GUI 界面 | 基于 Flet 的现代图形界面，深色/浅色主题自适应 |
 | 🔧 翻译修复 | 质量扫描 + 选择性重翻，修复不一致的译名 |
 
@@ -29,7 +30,7 @@
 **Windows 用户** 可直接下载开箱即用的发行包，无需安装 Python 或任何依赖：
 
 1. 前往 [Releases](https://github.com/zjy2968466837/novel-translator/releases) 页面
-2. 下载最新的 `NovelTranslator-v3.0.0-win-x64.zip`（约 57 MB）
+2. 下载最新的 `NovelTranslator-v1.0.1-win-x64.zip`（约 60 MB）
 3. 解压到任意目录
 4. 双击 `NovelTranslator.exe` 即可启动 GUI
 
@@ -44,7 +45,7 @@
 ### 环境要求
 
 - Python ≥ 3.10
-- 一个 OpenAI 兼容的 API Key（推荐 [硅基流动 SiliconFlow](https://siliconflow.cn/)）
+- 一个 AI API Key（支持 OpenAI兼容 / Anthropic / Google / Ollama 本地）
 
 ### 安装步骤
 

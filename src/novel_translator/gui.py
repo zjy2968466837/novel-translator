@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-novel_translator.gui - Flet 图形界面 v3.0
+novel_translator.gui - Flet 图形界面 v1.0.1
 
 功能:
+- 多 AI 提供商支持 (OpenAI兼容 / Anthropic / Google / Ollama)
 - 跟随系统主题 (浅色/深色/自动)
 - 翻译风格按模型分类预设
 - 模型参数可折叠面板
@@ -10,7 +11,7 @@ novel_translator.gui - Flet 图形界面 v3.0
 - 术语表管理
 - 翻译修复 (质量扫描 + 选择性重翻)
 - 整章翻译 & 上下文注入
-- Chat / Completion 双模型支持
+- EPUB 结构/样式保留
 """
 
 import os
@@ -21,20 +22,25 @@ import threading
 import flet as ft
 
 from novel_translator.engine import TranslatorEngine, TranslationConfig
+from novel_translator.providers import (
+    PROVIDER_PRESETS, get_provider_names, get_provider_models,
+    get_provider_default_url, get_provider_default_model,
+)
 
 APP_TITLE = "轻小说翻译器"
-APP_VERSION = "3.0"
+APP_VERSION = "1.0.1"
 CONFIG_FILE = "translator_config.json"
 HISTORY_FILE = "translator_history.json"
 
-# ===== 预设模型 =====
-PRESET_MODELS = [
-    {"name": "DeepSeek V3.2", "model": "deepseek-ai/DeepSeek-V3.2", "url": "https://api.siliconflow.cn/v1"},
-    {"name": "DeepSeek R1", "model": "deepseek-ai/DeepSeek-R1-0528", "url": "https://api.siliconflow.cn/v1"},
-    {"name": "Qwen3 32B", "model": "Qwen/Qwen3-32B", "url": "https://api.siliconflow.cn/v1"},
-    {"name": "Qwen3 8B", "model": "Qwen/Qwen3-8B", "url": "https://api.siliconflow.cn/v1"},
-    {"name": "自定义", "model": "", "url": ""},
-]
+# ===== 预设模型（动态生成 + 自定义） =====
+def _build_preset_models(provider_key: str = "openai") -> list:
+    """根据 Provider 生成预设模型列表"""
+    models = get_provider_models(provider_key)
+    result = [{"name": m["name"], "model": m["model"], "url": m["url"]} for m in models]
+    result.append({"name": "自定义", "model": "", "url": ""})
+    return result
+
+PRESET_MODELS = _build_preset_models("openai")
 
 # ===== 翻译风格预设 (按模型分类) =====
 STYLE_CATEGORIES = {
@@ -283,6 +289,7 @@ def main(page: ft.Page):
 
     def get_config():
         cfg = TranslationConfig()
+        cfg.provider = provider_dropdown.value or "openai"
         cfg.api_key = api_key_field.value or ""
         cfg.base_url = api_url_field.value or "https://api.siliconflow.cn/v1"
         cfg.model_name = model_field.value or "deepseek-ai/DeepSeek-V3.2"
@@ -322,6 +329,7 @@ def main(page: ft.Page):
 
     def save_ui_config():
         _save_config({
+            "provider": provider_dropdown.value,
             "api_key": api_key_field.value,
             "base_url": api_url_field.value,
             "model_name": model_field.value,
@@ -397,11 +405,37 @@ def main(page: ft.Page):
 
     def on_model_preset(e):
         idx = int(e.control.data)
-        p = PRESET_MODELS[idx]
-        if p["model"]:
-            model_field.value = p["model"]
-        if p["url"]:
-            api_url_field.value = p["url"]
+        provider_key = provider_dropdown.value or "openai"
+        models = _build_preset_models(provider_key)
+        if idx < len(models):
+            p = models[idx]
+            if p["model"]:
+                model_field.value = p["model"]
+            if p["url"]:
+                api_url_field.value = p["url"]
+        page.update()
+        save_ui_config()
+
+    def on_provider_change(e):
+        """Provider 切换时更新默认 URL、模型名和预设列表"""
+        nonlocal PRESET_MODELS
+        provider_key = provider_dropdown.value or "openai"
+        default_url = get_provider_default_url(provider_key)
+        default_model = get_provider_default_model(provider_key)
+        api_url_field.value = default_url
+        model_field.value = default_model
+        # 重建预设芯片
+        PRESET_MODELS = _build_preset_models(provider_key)
+        preset_chips.controls.clear()
+        for i, p in enumerate(PRESET_MODELS):
+            preset_chips.controls.append(
+                ft.TextButton(p["name"], on_click=on_model_preset, data=str(i))
+            )
+        # Ollama 不需要 API Key
+        if provider_key == "ollama":
+            api_key_field.helper_text = "Ollama 本地模式，API Key 可留空"
+        else:
+            api_key_field.helper_text = None
         page.update()
         save_ui_config()
 
@@ -929,11 +963,21 @@ def main(page: ft.Page):
     # ===== UI 组件 =====
 
     # ---------- API 配置 ----------
+    provider_names = get_provider_names()
+    provider_dropdown = ft.Dropdown(
+        label="AI 提供商",
+        value=saved.get("provider", "openai"),
+        options=[ft.dropdown.Option(key=k, text=v) for k, v in provider_names.items()],
+        width=200, border_radius=10, filled=True,
+        on_select=on_provider_change,
+        tooltip="选择 AI 提供商：\nOpenAI 兼容: DeepSeek/Qwen/GPT/SiliconFlow\nAnthropic: Claude\nGoogle: Gemini\nOllama: 本地模型",
+    )
     api_key_field = ft.TextField(
         label="API Key", prefix_icon=ft.Icons.KEY,
         password=True, can_reveal_password=True,
         value=saved.get("api_key", ""),
         border_radius=10, filled=True, on_blur=_on_field_blur,
+        helper_text="Ollama 本地模式，API Key 可留空" if saved.get("provider") == "ollama" else None,
     )
     api_url_field = ft.TextField(
         label="API 地址", prefix_icon=ft.Icons.LINK,
@@ -965,6 +1009,9 @@ def main(page: ft.Page):
         helper=ft.Text("格式: 【示例1】\n原文: ..\n译文: ..", size=10),
     )
     test_btn = ft.FilledTonalButton("测试连接", icon=ft.Icons.WIFI_TETHERING, on_click=on_test_api)
+    # 根据保存的 provider 生成初始预设芯片
+    _init_provider = saved.get("provider", "openai")
+    PRESET_MODELS = _build_preset_models(_init_provider)
     preset_chips = ft.Row(
         controls=[
             ft.TextButton(p["name"], on_click=on_model_preset, data=str(i))
@@ -979,7 +1026,7 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.Row([ft.Icon(ft.Icons.SETTINGS, color=ft.Colors.PRIMARY),
                         ft.Text("API 配置", size=17, weight=ft.FontWeight.W_600)], spacing=8),
-                api_key_field,
+                ft.Row([provider_dropdown, api_key_field], spacing=8),
                 ft.Row([api_url_field, test_btn], spacing=12),
                 ft.Row([model_field, model_type_dropdown], spacing=8),
                 few_shot_field,

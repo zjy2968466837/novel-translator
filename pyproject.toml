@@ -4,15 +4,15 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "novel-translator"
-version = "3.0.0"
-description = "日文轻小说 AI 翻译工具 — EPUB 日文→中文翻译器，支持 CLI / GUI 双模式"
+version = "1.0.1"
+description = "日文轻小说 AI 翻译工具 — EPUB 日文→中文翻译器，支持多 AI 提供商 / CLI / GUI 双模式"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "novel-translator contributors" },
 ]
-keywords = ["translation", "japanese", "chinese", "epub", "light-novel", "ai", "deepseek", "openai"]
+keywords = ["translation", "japanese", "chinese", "epub", "light-novel", "ai", "deepseek", "openai", "anthropic", "claude", "gemini", "ollama"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
@@ -37,6 +37,10 @@ cli = [
     "ebooklib>=0.18",
     "beautifulsoup4>=4.12",
     "lxml>=4.9",
+]
+providers = [
+    "anthropic>=0.30",
+    "google-generativeai>=0.5",
 ]
 
 [project.scripts]

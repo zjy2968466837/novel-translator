@@ -3,3 +3,7 @@ ebooklib>=0.18
 beautifulsoup4>=4.12
 lxml>=4.9
 flet>=0.25
+
+# 可选: 额外 AI 提供商支持
+anthropic>=0.30
+google-generativeai>=0.5

@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec 文件 — Novel Translator v3.0.0
+PyInstaller spec 文件 — Novel Translator v1.0.1
 
 生成方式:
   pyinstaller novel_translator.spec
@@ -37,6 +37,7 @@ nt_hiddenimports = [
     'novel_translator.engine',
     'novel_translator.gui',
     'novel_translator.cli',
+    'novel_translator.providers',
 ]
 
 # ===== 分析 =====
@@ -68,6 +69,14 @@ a = Analysis(
         "flet_runtime",
         # 翻译引擎依赖
         "openai",
+        # 可选 Provider SDK (条件导入，缺失时不崩溃)
+        "anthropic",
+        "httpx",
+        "google.generativeai",
+        "google.ai",
+        "google.api_core",
+        "google.protobuf",
+        "proto",
         "ebooklib",
         "ebooklib.epub",
         "bs4",

@@ -99,6 +99,16 @@ class TranslationConfig:
     # 补全模型专用
     few_shot_examples: str = ""
 
+    # ── DeepSeek Beta 功能（仅 provider="openai" + 官方 deepseek.com API Key 时生效）──
+    # 启用后 base_url 自动切换至 https://api.deepseek.com/beta
+    deepseek_beta: bool = False
+    # 对话前缀续写（Beta）：注入空 assistant prefix，强制模型直接输出翻译正文，不输出废话前置
+    use_prefix_completion: bool = False
+    # FIM 补全（Beta）：Fill In the Middle，仅 deepseek-chat 支持，deepseek-reasoner 不支持
+    use_fim_completion: bool = False
+    # 是否开启翻译过程的流式日志输出（逐块/逐 token 回调）
+    stream_logs: bool = False
+
 
 @dataclass
 class TranslationProgress:
@@ -203,6 +213,8 @@ class TranslatorEngine:
         self.on_error: Optional[Callable] = None
         self.on_complete: Optional[Callable] = None
         self.on_chapter_start: Optional[Callable] = None
+        # 流式回调（接收流式 chunk）
+        self.on_stream: Optional[Callable] = None
 
     # ── 日志 ──
 
@@ -229,8 +241,15 @@ class TranslatorEngine:
             presence_penalty=self.config.presence_penalty,
             max_tokens=self.config.max_tokens,
             few_shot_examples=self.config.few_shot_examples,
+            deepseek_beta=self.config.deepseek_beta,
+            use_prefix_completion=self.config.use_prefix_completion,
+            use_fim_completion=self.config.use_fim_completion,
         )
-        self.log(f"✅ {self.provider.provider_name} 已初始化 ({self.config.model_name})")
+        if self.config.deepseek_beta:
+            mode = "FIM补全" if self.config.use_fim_completion else ("前缀续写" if self.config.use_prefix_completion else "Beta模式")
+            self.log(f"✅ {self.provider.provider_name} 已初始化 ({self.config.model_name}) [DeepSeek Beta · {mode}]")
+        else:
+            self.log(f"✅ {self.provider.provider_name} 已初始化 ({self.config.model_name})")
 
     # ── 术语表 ──
 
@@ -295,15 +314,20 @@ class TranslatorEngine:
                 "クリス始终译为\u201c克里斯\u201d（不可出现\u201c克莉丝\u201d等变体）；"
                 "グリージャー的中文名始终为\u201c安涅莉丝\u201d（不可出现\u201c格里杰尔\u201d\u201c格里杰\u201d等音译变体）。"
                 "当原文出现全名时（如アネスト・グリージャー），译为\u201c安涅莉丝·格里杰尔\u201d。\n\n"
-                "翻译风格：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
+                "翻译预设：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
             )
-        g = glossary_dict if glossary_dict is not None else self.glossary
-        if g:
-            glossary_text = "\n【强制术语表】\n"
-            for k, v in g.items():
-                glossary_text += f"- {k} -> {v}\n"
-            return base_prompt + glossary_text
+        # 系统指令不再包含术语表，术语表将放入助手前缀（assistant prefix）以便与 DeepSeek 前缀续写配合使用。
         return base_prompt
+
+    def build_assistant_glossary(self, glossary_dict: dict | None = None) -> str:
+        """构建放在 assistant 前缀中的术语表文本（返回空字符串表示无术语表）"""
+        g = glossary_dict if glossary_dict is not None else self.glossary
+        if not g:
+            return ""
+        glossary_text = "【强制术语表】\n"
+        for k, v in g.items():
+            glossary_text += f"- {k} -> {v}\n"
+        return glossary_text
 
     def build_completion_prompt(self, text: str, prev_context: str = "") -> str:
         """为补全模型构建完整 prompt（含 few-shot 示例 + 术语表 + 上下文 + 原文）"""
@@ -537,7 +561,29 @@ class TranslatorEngine:
             if self.progress.is_cancelled:
                 return "[翻译已取消]"
             try:
-                result = self.provider.translate(self.system_prompt, user_content)
+                # 支持可选的流式输出：通过 on_stream 回调逐块接收模型输出
+                if hasattr(self.provider, 'translate') and self.config.stream_logs:
+                    acc: list[str] = []
+
+                    def _stream_cb(chunk: str):
+                        try:
+                            acc.append(chunk)
+                            if self.on_stream:
+                                self.on_stream(chunk)
+                            else:
+                                # 仍然输出至普通日志回调，便于兼容 UI
+                                self.log(chunk)
+                        except Exception:
+                            pass
+
+                    assistant_pref = self.build_assistant_glossary()
+                    result = self.provider.translate(self.system_prompt, user_content, assistant_prefix=assistant_pref, stream=True, stream_callback=_stream_cb)
+                    # 如果 provider 返回了最终合并结果，优先使用；否则合并 acc
+                    if not result and acc:
+                        result = "".join(acc)
+                else:
+                    assistant_pref = self.build_assistant_glossary()
+                    result = self.provider.translate(self.system_prompt, user_content, assistant_prefix=assistant_pref)
                 return result
             except Exception as e:
                 err_detail = self._format_api_error(e)
@@ -1178,7 +1224,22 @@ class TranslatorEngine:
                 on_retranslate_progress(idx + 1, len(valid_names), ch_name)
 
             chunks = self.split_text(chapter.content)
-            translated_parts = self._translate_chunks(chunks)
+            # 如果 provider 支持 DeepSeek FIM 补全且配置启用，则对每个 chunk 使用 FIM 模式进行重翻
+            translated_parts = []
+            if getattr(self.provider, 'deepseek_beta', False) and getattr(self.provider, 'use_fim_completion', False):
+                self.log("💡 使用 FIM 补全进行选择性重翻（若模型支持）")
+                assistant_pref = self.build_assistant_glossary()
+                for c in chunks:
+                    if self.progress.is_cancelled:
+                        break
+                    try:
+                        part = self.provider.translate(self.system_prompt, c, assistant_prefix=assistant_pref, stream=False)
+                    except Exception as e:
+                        self.log(f"⚠️ FIM 重翻失败，回退到标准翻译: {e}")
+                        part = self.provider.translate(self.system_prompt, c, assistant_prefix=assistant_pref)
+                    translated_parts.append(part)
+            else:
+                translated_parts = self._translate_chunks(chunks)
             translated_content = "\n".join(translated_parts)
             completed[ch_name] = translated_content
 

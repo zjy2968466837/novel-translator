@@ -22,6 +22,14 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- GUI 子命令 ----
     sub.add_parser("gui", help="启动图形界面")
 
+    # ---- download 子命令 ----
+    dl = sub.add_parser("download", help="按 URL 下载章节并生成 EPUB（供翻译使用）")
+    dl.add_argument("url", help="章节页面 URL")
+    dl.add_argument("-o", "--output", default=None, help="输出 EPUB 路径 (默认 downloaded_chapter.epub)")
+    dl.add_argument("--site", default="generic", help="站点键（用于选择站点处理器），默认 generic")
+    dl.add_argument("--selector", default="", help="可选：CSS 选择器以定位章节主体")
+    dl.add_argument("--title-selector", default="", help="可选：CSS 选择器以定位标题")
+
     # ---- translate (默认) ----
     tr = sub.add_parser("translate", help="命令行翻译")
     tr.add_argument("input", help="输入 EPUB 文件路径")
@@ -53,6 +61,22 @@ def main():
         from novel_translator.gui import run_gui
         run_gui()
         return
+
+    if args.command == "download":
+        from novel_translator.downloader import download_with_site
+        out = args.output or "downloaded_chapter.epub"
+        opts = {}
+        if args.selector:
+            opts["selector"] = args.selector
+        if args.title_selector:
+            opts["title_selector"] = args.title_selector
+        try:
+            path = download_with_site(args.site, args.url, out, opts)
+            print(f"✅ 已生成: {path}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"❌ 下载失败: {e}")
+            sys.exit(1)
 
     if args.command is None:
         # 无子命令时默认打印帮助

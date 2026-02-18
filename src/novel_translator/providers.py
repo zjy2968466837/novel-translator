@@ -17,6 +17,10 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# ===== DeepSeek Beta 相关常量 =====
+# DeepSeek Beta 功能需要使用专属 base_url，与标准 API 地址不同
+DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
+
 # ===== Provider 注册表 =====
 PROVIDER_PRESETS = {
     "openai": {
@@ -107,7 +111,7 @@ class AIProvider(ABC):
         self.few_shot_examples = few_shot_examples
 
     @abstractmethod
-    def translate(self, system_prompt: str, user_content: str) -> str:
+    def translate(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
         """
         发送翻译请求，返回翻译结果文本。
         出错时应抛出异常。
@@ -134,9 +138,23 @@ class OpenAIProvider(AIProvider):
     OpenAI 兼容 API Provider。
     支持 DeepSeek / Qwen / GPT / SiliconFlow / 任意 OpenAI 兼容端点。
     同时支持 Chat 模式和 Completion 模式。
+
+        DeepSeek Beta 功能（需官方 API Key 且 base_url 指向 https://api.deepseek.com/beta）：
+        - use_prefix_completion: 对话前缀续写（Beta） — 在 messages 尾部插入带
+            prefix=True 的空 assistant 前缀（可包含术语表），令模型直接续写译文，
+            减少无关开场语。
+        - use_fim_completion: FIM 补全（Beta） — 使用 Fill In the Middle，将
+            system_prompt + 原文 + 标记 作为前缀，suffix 为空，让模型只输出中间的译文，
+            仅 deepseek-chat 支持。
+        说明：两种方法均可通过前缀或 system_prompt 提供术语表，且不会将术语表
+        直接输出到译文中。
     """
 
     def __init__(self, **kwargs):
+        # 提取 Beta 专用参数（不传给基类）
+        self.deepseek_beta: bool = kwargs.pop("deepseek_beta", False)
+        self.use_prefix_completion: bool = kwargs.pop("use_prefix_completion", False)
+        self.use_fim_completion: bool = kwargs.pop("use_fim_completion", False)
         super().__init__(**kwargs)
         try:
             from openai import OpenAI
@@ -144,9 +162,13 @@ class OpenAIProvider(AIProvider):
             raise ImportError(
                 "使用 OpenAI 兼容 Provider 需要安装 openai 库：pip install openai"
             )
+        # 若启用 DeepSeek Beta，自动切换至 Beta 专属 base_url
+        effective_url = self.base_url or "https://api.siliconflow.cn/v1"
+        if self.deepseek_beta:
+            effective_url = DEEPSEEK_BETA_BASE_URL
         self._client = OpenAI(
             api_key=self.api_key,
-            base_url=self.base_url or "https://api.siliconflow.cn/v1",
+            base_url=effective_url,
         )
         self._resolved_type = self._resolve_model_type()
 
@@ -188,32 +210,256 @@ class OpenAIProvider(AIProvider):
 
         return "chat"  # 默认
 
-    def translate(self, system_prompt: str, user_content: str) -> str:
+    def translate(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        # FIM 补全优先级最高（仅 deepseek-chat 支持，deepseek-reasoner 不支持）
+        if self.deepseek_beta and self.use_fim_completion:
+            return self._translate_fim(system_prompt, user_content, assistant_prefix=assistant_prefix, stream=stream, stream_callback=stream_callback)
+        # 对话前缀续写次之
+        if self.deepseek_beta and self.use_prefix_completion:
+            return self._translate_chat_with_prefix(system_prompt, user_content, assistant_prefix=assistant_prefix, stream=stream, stream_callback=stream_callback)
+        # 普通 Completion 模型（base 模型）
         if self._resolved_type == "completion":
-            return self._translate_completion(system_prompt, user_content)
-        else:
-            return self._translate_chat(system_prompt, user_content)
+            return self._translate_completion(system_prompt, user_content, assistant_prefix=assistant_prefix, stream=stream, stream_callback=stream_callback)
+        # 默认 Chat 模式
+        return self._translate_chat(system_prompt, user_content, assistant_prefix=assistant_prefix, stream=stream, stream_callback=stream_callback)
 
-    def _translate_chat(self, system_prompt: str, user_content: str) -> str:
+    def _translate_chat(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
-        resp = self._client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            frequency_penalty=self.frequency_penalty,
-            presence_penalty=self.presence_penalty,
-            max_tokens=self.max_tokens,
-        )
-        text = resp.choices[0].message.content or ""
+        if stream:
+            resp = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            accumulated = []
+            try:
+                for event in resp:
+                    # 尝试兼容不同 SDK 事件结构
+                    chunk = None
+                    try:
+                        chunk = event.choices[0].delta.content
+                    except Exception:
+                        pass
+                    if not chunk:
+                        try:
+                            chunk = event.choices[0].message.content
+                        except Exception:
+                            pass
+                    if not chunk:
+                        try:
+                            chunk = event.choices[0].text
+                        except Exception:
+                            pass
+                    if chunk:
+                        accumulated.append(chunk)
+                        if stream_callback:
+                            try:
+                                stream_callback(chunk)
+                            except Exception:
+                                pass
+            except Exception:
+                # 如果迭代失败，兼容回退为一次性请求
+                resp = self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    frequency_penalty=self.frequency_penalty,
+                    presence_penalty=self.presence_penalty,
+                    max_tokens=self.max_tokens,
+                )
+                accumulated = [resp.choices[0].message.content or ""]
+            text = "".join(accumulated)
+        else:
+            resp = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+            )
+            text = resp.choices[0].message.content or ""
+
         # 清理 <think> 标签 (DeepSeek R1 等推理模型)
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         return text
 
-    def _translate_completion(self, system_prompt: str, user_content: str) -> str:
+    def _translate_chat_with_prefix(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        """
+        对话前缀续写（Beta）— DeepSeek 官方 Beta 功能。
+
+        原理：在 messages 末尾追加一条 role=assistant、content="" 且 prefix=True 的消息。
+        这相当于告诉模型"你已经开始翻译了"，模型会直接续写翻译正文，
+        不会再输出"好的，我来翻译"等无关的前置语气。
+
+        术语表可通过 system_prompt 或 assistant 前缀提供，模型的输出不会
+        直接包含术语表，保证译文纯净。
+
+        注意：需要 base_url=DEEPSEEK_BETA_BASE_URL（https://api.deepseek.com/beta）。
+        """
+        # 构建 messages：将术语表（若提供）放在 assistant 前缀中
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        if assistant_prefix:
+            messages.append({"role": "assistant", "content": assistant_prefix, "prefix": True})
+        # 最终追加一个空的 assistant 前缀以强制从此处续写
+        messages.append({"role": "assistant", "content": "", "prefix": True})
+
+        if stream:
+            resp = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            accumulated = []
+            try:
+                for event in resp:
+                    chunk = None
+                    try:
+                        chunk = event.choices[0].delta.content
+                    except Exception:
+                        pass
+                    if not chunk:
+                        try:
+                            chunk = event.choices[0].message.content
+                        except Exception:
+                            pass
+                    if not chunk:
+                        try:
+                            chunk = event.choices[0].text
+                        except Exception:
+                            pass
+                    if chunk:
+                        accumulated.append(chunk)
+                        if stream_callback:
+                            try:
+                                stream_callback(chunk)
+                            except Exception:
+                                pass
+            except Exception:
+                resp = self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    frequency_penalty=self.frequency_penalty,
+                    presence_penalty=self.presence_penalty,
+                    max_tokens=self.max_tokens,
+                )
+                accumulated = [resp.choices[0].message.content or ""]
+            text = "".join(accumulated)
+        else:
+            resp = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+            )
+            text = resp.choices[0].message.content or ""
+
+        # 清理 <think> 标签 (DeepSeek R1 等推理模型)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text
+
+    def _translate_fim(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        """
+        FIM 补全（Beta）— DeepSeek 官方 Beta 功能，仅 deepseek-chat 支持。
+
+        原理：使用 Fill In the Middle 技术，将 system_prompt + 原文 + 格式标记
+        作为 prompt 前缀，suffix 留空，模型将翻译结果填补在中间。
+
+        优势：FIM 模式对翻译任务有专项优化，能更好地控制输出格式，
+        减少模型在翻译文本之外输出多余内容的概率，提高翻译质量。
+
+        注意事项：仅支持 deepseek-chat（deepseek-reasoner 不支持），最大补全
+        长度约 4K tokens，需使用 DeepSeek Beta base_url。术语表可通过前缀或
+        system_prompt 提供，输出不包含术语表。
+        """
+        # 构建 FIM prompt 前缀：系统指令 + 原文 + 格式引导
+        # 将 assistant_prefix（术语表）并入 FIM 前缀，以保证 FIM 模式也能使用术语表
+        fim_prefix_parts = [system_prompt]
+        if assistant_prefix:
+            fim_prefix_parts.append(assistant_prefix)
+        fim_prefix = "\n\n".join([p for p in fim_prefix_parts if p])
+        fim_prompt = f"{fim_prefix}\n\n[原文]\n{user_content}\n\n[译文]\n"
+        if stream:
+            resp = self._client.completions.create(
+                model=self.model_name,
+                prompt=fim_prompt,
+                suffix="",
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            accumulated = []
+            try:
+                for event in resp:
+                    chunk = None
+                    try:
+                        chunk = event.choices[0].text
+                    except Exception:
+                        pass
+                    if chunk:
+                        accumulated.append(chunk)
+                        if stream_callback:
+                            try:
+                                stream_callback(chunk)
+                            except Exception:
+                                pass
+            except Exception:
+                resp = self._client.completions.create(
+                    model=self.model_name,
+                    prompt=fim_prompt,
+                    suffix="",
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    frequency_penalty=self.frequency_penalty,
+                    presence_penalty=self.presence_penalty,
+                    max_tokens=self.max_tokens,
+                )
+                accumulated = [resp.choices[0].text or ""]
+            text = "".join(accumulated)
+        else:
+            resp = self._client.completions.create(
+                model=self.model_name,
+                prompt=fim_prompt,
+                suffix="",
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+            )
+            text = resp.choices[0].text or ""
+
+        # 清理 <think> 标签
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text
+
+    def _translate_completion(self, system_prompt: str, user_content: str, *, stream: bool = False, stream_callback=None) -> str:
         prompt_parts = [system_prompt, ""]
         if self.few_shot_examples:
             prompt_parts.append(self.few_shot_examples)
@@ -221,16 +467,55 @@ class OpenAIProvider(AIProvider):
         prompt_parts.append(f"原文:\n{user_content}\n\n译文:\n")
         full_prompt = "\n".join(prompt_parts)
 
-        resp = self._client.completions.create(
-            model=self.model_name,
-            prompt=full_prompt,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            frequency_penalty=self.frequency_penalty,
-            presence_penalty=self.presence_penalty,
-            max_tokens=self.max_tokens,
-        )
-        return resp.choices[0].text.strip()
+        if stream:
+            resp = self._client.completions.create(
+                model=self.model_name,
+                prompt=full_prompt,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            accumulated = []
+            try:
+                for event in resp:
+                    chunk = None
+                    try:
+                        chunk = event.choices[0].text
+                    except Exception:
+                        pass
+                    if chunk:
+                        accumulated.append(chunk)
+                        if stream_callback:
+                            try:
+                                stream_callback(chunk)
+                            except Exception:
+                                pass
+            except Exception:
+                resp = self._client.completions.create(
+                    model=self.model_name,
+                    prompt=full_prompt,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    frequency_penalty=self.frequency_penalty,
+                    presence_penalty=self.presence_penalty,
+                    max_tokens=self.max_tokens,
+                )
+                accumulated = [resp.choices[0].text or ""]
+            return "".join(accumulated).strip()
+        else:
+            resp = self._client.completions.create(
+                model=self.model_name,
+                prompt=full_prompt,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                frequency_penalty=self.frequency_penalty,
+                presence_penalty=self.presence_penalty,
+                max_tokens=self.max_tokens,
+            )
+            return resp.choices[0].text.strip()
 
     def test_connection(self) -> Tuple[bool, str]:
         try:
@@ -407,12 +692,21 @@ def create_provider(
     presence_penalty: float = 0.0,
     max_tokens: int = 8192,
     few_shot_examples: str = "",
+    deepseek_beta: bool = False,
+    use_prefix_completion: bool = False,
+    use_fim_completion: bool = False,
 ) -> AIProvider:
     """
     根据 provider_type 创建对应的 AIProvider 实例。
 
     Args:
         provider_type: "openai" / "anthropic" / "google" / "ollama"
+        deepseek_beta: 启用 DeepSeek Beta，自动将 base_url 切换至
+            https://api.deepseek.com/beta（需官方 DeepSeek API Key）
+        use_prefix_completion: 对话前缀续写 Beta（deepseek_beta=True 时生效）
+            在 messages 末尾注入空 assistant prefix，强制模型直接输出翻译正文
+        use_fim_completion: FIM 补全 Beta（deepseek_beta=True 且 deepseek-chat 时生效）
+            Fill In the Middle 模式，优先级高于 use_prefix_completion
         其他参数传递给 Provider 构造器
     Returns:
         AIProvider 实例
@@ -437,6 +731,9 @@ def create_provider(
         presence_penalty=presence_penalty,
         max_tokens=max_tokens,
         few_shot_examples=few_shot_examples,
+        deepseek_beta=deepseek_beta,
+        use_prefix_completion=use_prefix_completion,
+        use_fim_completion=use_fim_completion,
     )
 
 

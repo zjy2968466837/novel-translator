@@ -5,7 +5,7 @@ novel_translator.gui - Flet 图形界面
 功能:
 - 多 AI 提供商支持 (OpenAI兼容 / Anthropic / Google / Ollama)
 - 跟随系统主题 (浅色/深色/自动)
-- 翻译风格按模型分类预设
+- 翻译预设按模型分类
 - 模型参数可折叠面板
 - 断点续传 & 断点恢复
 - 术语表管理
@@ -27,6 +27,7 @@ from novel_translator.providers import (
     PROVIDER_PRESETS, get_provider_names, get_provider_models,
     get_provider_default_url, get_provider_default_model,
 )
+from novel_translator.downloader import download_with_site, SITE_HANDLERS
 
 APP_TITLE = "轻小说翻译器"
 APP_VERSION = __version__
@@ -43,11 +44,11 @@ def _build_preset_models(provider_key: str = "openai") -> list:
 
 PRESET_MODELS = _build_preset_models("openai")
 
-# ===== 翻译风格预设 (按模型分类) =====
+# ===== 翻译预设 (按模型分类) =====
 STYLE_CATEGORIES = {
     "DeepSeek 调优": {
         "经典风格 (推荐)": {
-            "desc": "严格忠实原文、禁止添加语气词、流畅合并短句 — DeepSeek 系列模型专属调优",
+            "desc": "严格忠实原文、禁止添加语气词、流畅合并短句",
             "temperature": 1.1,
             "top_p": 0.9,
             "frequency_penalty": 0.1,
@@ -74,7 +75,7 @@ STYLE_CATEGORIES = {
                 "12. 纯净输出：只输出翻译正文，严禁输出翻译注释、译者注、脚注、说明文字、括号补充解释。\n"
                 "13. 术语前后一致：同一专有名词全文必须使用完全相同的译名和标记格式。\n"
                 "14. 标记统一：专有名词一律使用「」标记，不得混用『』《》【】等。\n\n"
-                "翻译风格：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
+                "翻译预设：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
             ),
         },
         "忠实流畅": {
@@ -105,13 +106,13 @@ STYLE_CATEGORIES = {
                 "12. 纯净输出：只输出翻译正文，严禁输出翻译注释、译者注、脚注、说明文字、括号补充解释。\n"
                 "13. 术语前后一致：同一专有名词全文必须使用完全相同的译名和标记格式。\n"
                 "14. 标记统一：专有名词一律使用「」标记，不得混用『』《》【】等。\n\n"
-                "翻译风格：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
+                "翻译预设：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
             ),
         },
     },
     "自定义": {
         "自定义": {
-            "desc": "使用自定义提示词，完全控制翻译风格",
+            "desc": "使用自定义提示词，完全控制翻译预设",
             "temperature": 0.7,
             "top_p": 0.9,
             "frequency_penalty": 0.1,
@@ -261,6 +262,14 @@ def main(page: ft.Page):
             preset = FLAT_STYLES.get(style_name, {})
             cfg.custom_prompt = preset.get("prompt", "")
         cfg.few_shot_examples = few_shot_field.value or ""
+        cfg.deepseek_beta = deepseek_beta_switch.value
+        cfg.use_prefix_completion = prefix_completion_switch.value
+        cfg.use_fim_completion = fim_completion_switch.value
+        # 流式日志选项
+        try:
+            cfg.stream_logs = stream_logs_switch.value
+        except Exception:
+            cfg.stream_logs = False
         try:
             cfg.start_chapter = int(start_chapter_field.value or 0)
         except ValueError:
@@ -293,6 +302,10 @@ def main(page: ft.Page):
             "style_preset": style_dropdown.value,
             "custom_prompt": custom_prompt_field.value,
             "few_shot_examples": few_shot_field.value,
+            "deepseek_beta": deepseek_beta_switch.value,
+            "use_prefix_completion": prefix_completion_switch.value,
+            "use_fim_completion": fim_completion_switch.value,
+            "stream_logs": stream_logs_switch.value,
         })
 
     def save_params_to_history():
@@ -347,18 +360,7 @@ def main(page: ft.Page):
         theme_btn.tooltip = labels[nxt]
         page.update()
 
-    def on_model_preset(e):
-        idx = int(e.control.data)
-        provider_key = provider_dropdown.value or "openai"
-        models = _build_preset_models(provider_key)
-        if idx < len(models):
-            p = models[idx]
-            if p["model"]:
-                model_field.value = p["model"]
-            if p["url"]:
-                api_url_field.value = p["url"]
-        page.update()
-        save_ui_config()
+    # 预设芯片已移除（不再提供快速预设按钮）
 
     def on_provider_change(e):
         """Provider 切换时更新默认 URL、模型名和预设列表"""
@@ -368,13 +370,8 @@ def main(page: ft.Page):
         default_model = get_provider_default_model(provider_key)
         api_url_field.value = default_url
         model_field.value = default_model
-        # 重建预设芯片
+        # 预设按钮已移除，保留模型与 URL 自动填充逻辑
         PRESET_MODELS = _build_preset_models(provider_key)
-        preset_chips.controls.clear()
-        for i, p in enumerate(PRESET_MODELS):
-            preset_chips.controls.append(
-                ft.TextButton(p["name"], on_click=on_model_preset, data=str(i))
-            )
         # Ollama 不需要 API Key
         if provider_key == "ollama":
             api_key_field.hint_text = "Ollama 本地模式，API Key 可留空"
@@ -755,25 +752,20 @@ def main(page: ft.Page):
             show_snackbar("❌ 请先选择断点文件")
             return
 
-        rules = None
-        custom_rules_text = fix_rules_field.value.strip() if fix_rules_field.value else ""
-        if custom_rules_text:
+        # 从独立的关键词/说明输入栏构建规则字典，至少填写一对
+        rules = {}
+        try:
+            for kf, df in zip(fix_rules_keyword_fields, fix_rules_desc_fields):
+                k = (kf.value or "").strip()
+                d = (df.value or "").strip()
+                if not k:
+                    continue
+                rules[k] = d or "需修正"
+        except Exception:
             rules = {}
-            for line in custom_rules_text.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                if "→" in line:
-                    parts = line.split("→", 1)
-                elif "=" in line:
-                    parts = line.split("=", 1)
-                else:
-                    rules[line] = "需修正"
-                    continue
-                rules[parts[0].strip()] = parts[1].strip()
 
         if not rules:
-            show_snackbar("❌ 请先填写检查规则（每行一个关键词→说明）")
+            show_snackbar("❌ 请至少填写一组规则（示例：关键词=前辈，说明=替换为 学姐）")
             return
 
         cfg = TranslationConfig()
@@ -945,6 +937,19 @@ def main(page: ft.Page):
         tooltip="自动检测: 优先通过模型名判断，否则探测 API。\n对话模型: 使用 chat.completions API (GPT/DeepSeek/Qwen 等)\n补全模型: 使用 completions API + Few-shot (base 模型)",
         on_select=lambda _: save_ui_config(),
     )
+    def update_few_shot_visibility(e=None):
+        try:
+            few_shot_field.visible = (model_type_dropdown.value == "completion")
+        except Exception:
+            few_shot_field.visible = False
+        try:
+            page.update()
+        except Exception:
+            pass
+    def on_model_type_change(e):
+        save_ui_config()
+        update_few_shot_visibility()
+    model_type_dropdown.on_change = on_model_type_change
     few_shot_field = ft.TextField(
         label="Few-shot 示例 (补全模型专用，选填)",
         value=saved.get("few_shot_examples", ""),
@@ -952,17 +957,85 @@ def main(page: ft.Page):
         border_radius=10, filled=True, on_blur=_on_field_blur,
         helper=ft.Text("格式: 【示例1】\n原文: ..\n译文: ..", size=10),
     )
+    try:
+        few_shot_field.visible = (saved.get("model_type", "auto") == "completion")
+    except Exception:
+        few_shot_field.visible = False
+    # ---- DeepSeek Beta 功能开关 ----
+    def on_deepseek_beta_toggle(e):
+        """
+        启用/禁用 DeepSeek Beta 模式。
+        开启后 base_url 自动切换至 https://api.deepseek.com/beta，
+        并显示子选项（对话前缀续写 / FIM 补全）。
+        关闭时同步重置子选项，防止遗留状态。
+        """
+        enabled = deepseek_beta_switch.value
+        beta_sub_options.visible = enabled
+        if not enabled:
+            prefix_completion_switch.value = False
+            fim_completion_switch.value = False
+        page.update()
+        save_ui_config()
+
+    deepseek_beta_switch = ft.Switch(
+        label="启用 DeepSeek Beta（官方 API 专属）",
+        value=saved.get("deepseek_beta", False),
+        tooltip=(
+            "启用 DeepSeek Beta 功能（需使用官方 DeepSeek API Key）。\n"
+            "开启后 base_url 将自动切换至 https://api.deepseek.com/beta，\n"
+            "以支持「对话前缀续写」和「FIM 补全」两项 Beta 特性。\n"
+            "⚠️ 仅适用于直接调用 deepseek.com 官方 API 的场景，\n"
+            "中转站 / SiliconFlow 等第三方服务不支持 Beta 端点。"
+        ),
+        on_change=on_deepseek_beta_toggle,
+    )
+    prefix_completion_switch = ft.Switch(
+        label="对话前缀续写（Beta）",
+        value=saved.get("use_prefix_completion", False),
+        tooltip=(
+            "【对话前缀续写 Beta】\n"
+            "在 messages 末尾注入空的 assistant 前缀消息\n"
+            "（{\"role\": \"assistant\", \"content\": \"\", \"prefix\": true}），\n"
+            "强制模型从翻译正文直接续写，\n"
+            "避免输出「好的，我来翻译」「以下是翻译」等无意义废话前缀。\n\n"
+            "术语表通过 system_prompt 中的【强制术语表】区块注入，\n"
+            "不会出现在输出中，翻译结果纯净。\n\n"
+            "⚠️ 与 FIM 补全互斥，同时开启时以 FIM 补全优先。"
+        ),
+    )
+    fim_completion_switch = ft.Switch(
+        label="FIM 补全（Beta）",
+        value=saved.get("use_fim_completion", False),
+        tooltip=(
+            "【FIM 补全 Beta（Fill In the Middle）】\n"
+            "将 system_prompt + 原文 + 格式引导作为 prompt 前缀，\n"
+            "suffix 留空，模型补全出纯净译文，\n"
+            "有效减少输出格式噪声，提高翻译纯净度。\n\n"
+            "术语表注入 prompt 前缀的 system_prompt 中，\n"
+            "输出中不含术语表，翻译结果纯净。\n\n"
+            "⚠️ 仅 deepseek-chat 支持，deepseek-reasoner 不支持。"
+        ),
+    )
+    beta_sub_options = ft.Container(
+        content=ft.Column([prefix_completion_switch], spacing=2),
+        visible=saved.get("deepseek_beta", False),
+        padding=ft.Padding(left=0, right=0, top=0, bottom=0),
+    )
+    stream_logs_switch = ft.Switch(
+        label="启用流式日志输出",
+        value=saved.get("stream_logs", False),
+        tooltip=(
+            "启用后翻译过程将以流式方式回调日志（逐片段/逐 token），\n"
+            "可用于实时预览模型输出或将输出展示在日志面板中。\n"
+            "注意：流式输出会增加 UI 更新频率，可能影响性能。"
+        ),
+        on_change=lambda e: save_ui_config(),
+    )
     test_btn = ft.FilledTonalButton("测试连接", icon=ft.Icons.WIFI_TETHERING, on_click=on_test_api)
-    # 根据保存的 provider 生成初始预设芯片
+
+    # 根据保存的 provider 生成预设模型列表（UI 不展示预设按钮）
     _init_provider = saved.get("provider", "openai")
     PRESET_MODELS = _build_preset_models(_init_provider)
-    preset_chips = ft.Row(
-        controls=[
-            ft.TextButton(p["name"], on_click=on_model_preset, data=str(i))
-            for i, p in enumerate(PRESET_MODELS)
-        ],
-        wrap=True, spacing=4,
-    )
 
     api_card = ft.Card(
         content=ft.Container(
@@ -974,8 +1047,14 @@ def main(page: ft.Page):
                 ft.Row([api_url_field, test_btn], spacing=12),
                 ft.Row([model_field, model_type_dropdown], spacing=8),
                 few_shot_field,
-                ft.Text("快速选择:", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
-                preset_chips,
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Icon(ft.Icons.SCIENCE, color=ft.Colors.SECONDARY, size=16),
+                    ft.Text("DeepSeek Beta 功能", size=13, weight=ft.FontWeight.W_500, color=ft.Colors.SECONDARY),
+                ], spacing=6),
+                deepseek_beta_switch,
+                beta_sub_options,
+                # 流式开关 UI 移至运行日志面板以便更接近日志查看位置
             ], spacing=10),
         ),
         elevation=2,
@@ -1017,7 +1096,63 @@ def main(page: ft.Page):
         elevation=2,
     )
 
-    # ---------- 翻译风格 ----------
+    # ---------- 下载器（通过 URL） ----------
+    url_field = ft.TextField(label="章节 URL", prefix_icon=ft.Icons.LINK, expand=True)
+    site_options = [ft.dropdown.Option(k) for k in sorted(list(SITE_HANDLERS.keys()))]
+    if not site_options:
+        site_options = [ft.dropdown.Option("generic")]
+    site_dropdown = ft.Dropdown(label="站点", value=site_options[0].key, options=site_options, width=200)
+    selector_field = ft.TextField(label="内容选择器 (可选)", hint_text="例如: div.chapter-content", expand=True)
+    title_selector_field = ft.TextField(label="标题选择器 (可选)", hint_text="例如: h1.title", expand=True)
+
+    def on_download_click(e):
+        dl_btn.disabled = True
+        page.update()
+
+        def _task():
+            try:
+                url = url_field.value or ""
+                if not url:
+                    show_snackbar("❌ 请输入 URL")
+                    return
+                site = site_dropdown.value or "generic"
+                out = os.path.join(os.getcwd(), "downloaded_chapter.epub")
+                opts = {}
+                if selector_field.value:
+                    opts["selector"] = selector_field.value
+                if title_selector_field.value:
+                    opts["title_selector"] = title_selector_field.value
+                path = download_with_site(site, url, out, opts)
+                input_file_field.value = path
+                _load_chapters()
+                save_ui_config()
+                show_snackbar(f"✅ 下载并载入: {os.path.basename(path)}")
+            except Exception as ex:
+                show_snackbar(f"❌ 下载失败: {ex}")
+            finally:
+                dl_btn.disabled = False
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    dl_btn = ft.FilledTonalButton("下载并载入", icon=ft.Icons.DOWNLOAD, on_click=on_download_click)
+
+    download_card = ft.Card(
+        content=ft.Container(
+            padding=12,
+            content=ft.Column([
+                ft.Row([ft.Icon(ft.Icons.CLOUD_DOWNLOAD, color=ft.Colors.PRIMARY), ft.Text("从 URL 下载章节", size=16)], spacing=8),
+                ft.Row([url_field, site_dropdown, dl_btn], spacing=8),
+                ft.Row([selector_field, title_selector_field], spacing=8),
+            ], spacing=8),
+        ),
+        elevation=1,
+    )
+
+    # ---------- 翻译预设 ----------
     saved_style = saved.get("style_preset", "经典风格 (推荐)")
     if saved_style not in FLAT_STYLES:
         saved_style = "经典风格 (推荐)"
@@ -1031,9 +1166,9 @@ def main(page: ft.Page):
             style_options.append(ft.dropdown.Option(key=sname, text=sname))
 
     style_dropdown = ft.Dropdown(
-        label="翻译风格", value=saved_style, options=style_options,
+        label="翻译预设", value=saved_style, options=style_options,
         border_radius=10, filled=True, expand=True,
-        on_select=on_style_change, tooltip="选择翻译风格预设，自动调整提示词和参数",
+        on_select=on_style_change, tooltip="选择翻译预设，自动调整提示词和参数",
     )
     style_desc = ft.Text(
         FLAT_STYLES.get(saved_style, {}).get("desc", ""),
@@ -1069,7 +1204,7 @@ def main(page: ft.Page):
             padding=20,
             content=ft.Column([
                 ft.Row([ft.Icon(ft.Icons.PALETTE, color=ft.Colors.PRIMARY),
-                        ft.Text("翻译风格", size=17, weight=ft.FontWeight.W_600)], spacing=8),
+                    ft.Text("翻译预设", size=17, weight=ft.FontWeight.W_600)], spacing=8),
                 ft.Row([style_dropdown], spacing=12),
                 style_desc,
                 custom_prompt_container,
@@ -1286,11 +1421,17 @@ def main(page: ft.Page):
         label="源 EPUB (重翻必需)", prefix_icon=ft.Icons.BOOK,
         read_only=True, border_radius=10, filled=True, expand=True,
     )
-    fix_rules_field = ft.TextField(
-        label="检查规则 (每行: 关键词→说明，必填)",
-        border_radius=10, filled=True, multiline=True, min_lines=2, max_lines=4,
-        helper=ft.Text("示例: 前辈→应为学姐  换行  米娅→应为弥娅", size=10),
-    )
+    # 检查规则：使用多行独立输入（关键词 + 说明），避免用户使用箭头文本格式
+    fix_rules_keyword_fields = []
+    fix_rules_desc_fields = []
+    fix_rules_rows = []
+    for i in range(5):
+        kf = ft.TextField(label=f"关键词 #{i+1}", hint_text="示例: 前辈", border_radius=8, filled=True, expand=True)
+        df = ft.TextField(label=f"说明 #{i+1}", hint_text="示例: 替换为 学姐", border_radius=8, filled=True, expand=True)
+        fix_rules_keyword_fields.append(kf)
+        fix_rules_desc_fields.append(df)
+        fix_rules_rows.append(ft.Row([kf, df], spacing=8))
+    fix_rules_container = ft.Column(fix_rules_rows, spacing=6)
     fix_status_text = ft.Text("请选择断点文件", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
     fix_scan_btn = ft.FilledTonalButton("质量扫描", icon=ft.Icons.SEARCH, on_click=on_quality_scan, disabled=True)
     fix_retranslate_btn = ft.FilledButton(
@@ -1305,7 +1446,7 @@ def main(page: ft.Page):
 
     fix_panel = ft.ExpansionTile(
         title=ft.Text("翻译修复", size=17, weight=ft.FontWeight.W_600),
-        subtitle=ft.Text("扫描已翻译章节的质量问题，选择性重翻修复", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
+        subtitle=ft.Text("扫描已翻译章节的质量问题并按需重翻，支持关键词检测与修改建议", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
         leading=ft.Icon(ft.Icons.AUTO_FIX_HIGH, color=ft.Colors.SECONDARY),
         expanded=False,
         controls=[
@@ -1318,7 +1459,9 @@ def main(page: ft.Page):
                     ft.Row([fix_source_field,
                             ft.FilledTonalButton("选择源文件", icon=ft.Icons.UPLOAD_FILE, on_click=on_pick_fix_source)],
                            spacing=8),
-                    fix_rules_field,
+                    ft.Row([fim_completion_switch], spacing=8),
+                    ft.Text("提示：为每组填写要检测的关键词与对应的修改建议（示例：关键词=前辈，说明=替换为 学姐）。至少填写一组。", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
+                    fix_rules_container,
                     ft.Row([fix_scan_btn, fix_out_format, fix_retranslate_btn], spacing=12),
                     ft.Row([
                         ft.TextButton("全选", on_click=on_fix_select_all),
@@ -1357,6 +1500,8 @@ def main(page: ft.Page):
                     ft.Icon(ft.Icons.TERMINAL, color=ft.Colors.PRIMARY, size=18),
                     ft.Text("运行日志", size=15, weight=ft.FontWeight.W_600),
                     ft.Container(expand=True),
+                    # 流式日志开关移动到日志面板，便于用户即时开启/关闭日志流式输出
+                    stream_logs_switch,
                     ft.IconButton(ft.Icons.DELETE_SWEEP, tooltip="清空日志", icon_size=16,
                                   on_click=lambda _: (log_list.controls.clear(), page.update())),
                 ], spacing=6),
@@ -1431,12 +1576,35 @@ def main(page: ft.Page):
 
     # --- 窗口关闭时自动保存 ---
     def on_window_event(e):
-        if e.data == "close":
-            save_ui_config()
-            save_params_to_history()
-            page.window.destroy()
+        # 兼容不同 Flet 版本的事件结构，确保在窗口关闭请求时能保存状态并关闭窗口
+        try:
+            evdata = getattr(e, "data", e)
+        except Exception:
+            evdata = e
 
-    page.window.prevent_close = True
+        # 更宽松的关闭检测：只要事件描述中包含 close 字样即视为关闭请求
+        try:
+            is_close = "close" in str(evdata).lower()
+        except Exception:
+            is_close = False
+
+        if is_close:
+            try:
+                save_ui_config()
+                save_params_to_history()
+            except Exception:
+                pass
+            # 尝试优雅关闭窗口，若失败则尝试强制销毁
+            try:
+                page.window.destroy()
+            except Exception:
+                try:
+                    page.window.close()
+                except Exception:
+                    pass
+
+    # 允许系统正常关闭窗口（Flet 的不同版本在事件回调上存在差异）
+    page.window.prevent_close = False
     page.window.on_event = on_window_event
     page.update()
 

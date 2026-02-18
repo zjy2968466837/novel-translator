@@ -513,10 +513,25 @@ class TranslatorEngine:
         if first_line and len(first_line) <= 30:
             title = first_line
             body = "\n".join(lines[1:]).strip()
+            # 去除开头的 xx. 前缀（如 01. / Vol.1. / AB. 等英文/数字前缀）
+            title = TranslatorEngine._strip_leading_xx_dot(title)
             return title, body
 
         title = f"第{fallback_index}章" if fallback_index is not None else first_line[:20]
+        title = TranslatorEngine._strip_leading_xx_dot(title)
         return title, content.strip()
+
+    @staticmethod
+    def _strip_leading_xx_dot(title: str) -> str:
+        """移除标题开头的 ASCII/数字/连字符等前缀并随 dot 的模式，例如: '01. ', 'Vol.01-', 'AB.' 等。
+
+        只匹配英文/数字/连字符/下划线前缀，以避免误删中文开头的有效词。
+        """
+        if not title:
+            return title
+        # 匹配一个或多个以字母/数字/连字符/下划线组成的段，后接点或点与连字符，然后删除
+        new = re.sub(r'^\s*(?:[A-Za-z0-9_\-]{1,12}[\.．\-])+\s*', '', title)
+        return new.strip()
 
     def split_text(self, text: str) -> list[str]:
         if not text:
@@ -774,7 +789,59 @@ class TranslatorEngine:
                 pass  # ebooklib 的 metadata API 较复杂，先设置基本信息
             src_name = os.path.splitext(os.path.basename(self.config.input_file))[0]
             book.set_identifier("novel-translator-output")
-            book.set_title(f"{src_name} (中文翻译)")
+
+            # 尝试从元数据读取原始书名，并使用 provider 对书名进行翻译（如可用）
+            orig_title = None
+            try:
+                for meta in source_book.metadata.get('http://purl.org/dc/elements/1.1/', []):
+                    try:
+                        # meta 结构: (name, value, attrs)
+                        if isinstance(meta, (list, tuple)) and len(meta) >= 2 and str(meta[0]).lower() == 'title':
+                            orig_title = str(meta[1])
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                orig_title = None
+
+            def _sanitize_title(t: str) -> str:
+                if not t:
+                    return t
+                # 去除开头类似 `01. ` 或 `Vol.01-` 的前缀
+                t = re.sub(r'^\s*[\dA-Za-z一二三四五六七八九零十]+[\.\-_\s]+', '', t)
+                # 去除尾部的（中文翻译）或 (中文翻译)
+                t = re.sub(r'[\s　]*[（(]\s*中文翻译\s*[)）]\s*$', '', t)
+                return t.strip()
+
+            translated_title = None
+            if orig_title:
+                try:
+                    # 如果 provider 可用，则发起简短翻译请求，仅翻译书名并返回简洁结果
+                    if self.provider:
+                        prompt = (
+                            f"将以下书名翻译为简洁的中文书名，仅返回翻译结果，不添加注释或括号：\n\n{orig_title}"
+                        )
+                        assistant_pref = self.build_assistant_glossary()
+                        try:
+                            translated = self.provider.translate(self.system_prompt, prompt, assistant_prefix=assistant_pref)
+                        except Exception:
+                            translated = None
+                        if translated:
+                            # 取首行作为标题候选
+                            translated_title = translated.strip().split('\n')[0].strip()
+                except Exception:
+                    translated_title = None
+
+            final_title = None
+            if translated_title:
+                final_title = _sanitize_title(translated_title)
+            elif orig_title:
+                final_title = _sanitize_title(orig_title)
+            else:
+                final_title = _sanitize_title(src_name)
+
+            # 设置书名与语言/作者信息
+            book.set_title(final_title)
             book.set_language("zh")
             book.add_author("AI Translation")
 
@@ -799,7 +866,15 @@ class TranslatorEngine:
         else:
             book.set_identifier("novel-translator-output")
             src_name = os.path.splitext(os.path.basename(self.config.output_file))[0]
-            book.set_title(f"{src_name}")
+            # 去除可能的前缀/尾部注记
+            def _sanitize_simple(t: str) -> str:
+                if not t:
+                    return t
+                t = re.sub(r'^\s*[\dA-Za-z一二三四五六七八九零十]+[\.\-_\s]+', '', t)
+                t = re.sub(r'[\s　]*[（(]\s*中文翻译\s*[)）]\s*$', '', t)
+                return t.strip()
+
+            book.set_title(_sanitize_simple(src_name))
             book.set_language("zh")
             book.add_author("AI Translation")
 

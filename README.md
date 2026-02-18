@@ -9,11 +9,10 @@
 ## 📝 1.1.0 更新说明
 
 - 集成若干界面与内部改进：增强 GUI 对输入文件/参数的便捷设置与章节读取稳定性。
-- 添加可扩展的站点处理器框架（内部使用），便于后续按站点定制章节抽取规则。
-- 修正若干 EPUB 输出与 HTML 处理的边缘情况，改进 ebooklib 兼容性。
--增强了deepseek v3.2的支持
-
-
+ - 集成若干界面与内部改进：增强 GUI 对输入文件/参数的便捷设置与章节读取稳定性。
+ - 修正若干 EPUB 输出与 HTML 处理的边缘情况，改进 ebooklib 兼容性。
+ - 增强了 DeepSeek V3.2 的支持
+ - 版本号更新为 `1.1.0`。
 
 
 ## ✨ 功能特性
@@ -82,6 +81,8 @@ pip install -e .
 
 ## 🚀 使用方式
 
+推荐：我们建议通过 DeepSeek 官方 API 来使用翻译服务（例如模型 `deepseek-ai/DeepSeek-V3.2`）。请使用 DeepSeek 官方文档中提供的端点与 API Key，并通过 `--base-url` 或 GUI 中的 API 基础地址设置为官方端点以获得最佳稳定性与合规性。
+
 ### GUI 模式（推荐）
 
 ```bash
@@ -111,7 +112,7 @@ python -m novel_translator translate input.epub \
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--api-key` | API Key（必填） | — |
-| `--base-url` | API 地址 | `https://api.siliconflow.cn/v1` |
+| `--base-url` | API 地址（建议设置为 DeepSeek 官方端点） | `https://api.siliconflow.cn/v1` |
 | `--model` | 模型名称 | `deepseek-ai/DeepSeek-V3.2` |
 | `--format` | 输出格式 `txt`/`epub` | `txt` |
 | `--glossary` | 术语表 JSON 路径 | — |

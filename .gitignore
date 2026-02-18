@@ -48,3 +48,11 @@ novel_translated*.md
 
 # Backup files
 *_backup.py
+
+# Local / generated outputs (ignore editor/runtime outputs)
+*.out
+launcher.out
+
+# Ignore embedded/third-party repos that shouldn't be tracked as files
+brave-search-mcp/
+mcp-browser-use/

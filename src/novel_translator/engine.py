@@ -1136,6 +1136,37 @@ class TranslatorEngine:
         self._pause_event.set()
         self.log("🛑 正在取消...")
 
+    def disable_streaming(self):
+        """关闭流式输出：
+
+        - 关闭 `config.stream_logs`，停止以流回调输出部分结果。
+        - 暂存并清除 `on_stream` 回调，恢复为普通日志输出。
+        """
+        try:
+            # 备份现有回调以便恢复
+            self._saved_on_stream = getattr(self, "on_stream", None)
+            self.on_stream = None
+        except Exception:
+            self._saved_on_stream = None
+        self.config.stream_logs = False
+        self.log("ℹ️ 已关闭流式输出，日志恢复为普通模式")
+
+    def restore_streaming(self):
+        """恢复先前的流式输出设置：
+
+        - 如果之前使用 `disable_streaming()` 暂存了回调，则恢复该回调。
+        - 将 `config.stream_logs` 置回 True（如需仅恢复回调而不启用流式，请手动调整）。
+        """
+        prev = getattr(self, "_saved_on_stream", None)
+        if prev:
+            self.on_stream = prev
+            try:
+                delattr(self, "_saved_on_stream")
+            except Exception:
+                pass
+        self.config.stream_logs = True
+        self.log("ℹ️ 已恢复流式输出（已启用 stream_logs=True 且恢复了先前的 on_stream 回调）")
+
     # ── API 测试 ──
 
     def test_api_connection(self):

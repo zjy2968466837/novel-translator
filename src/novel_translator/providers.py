@@ -313,8 +313,10 @@ class OpenAIProvider(AIProvider):
             {"role": "user", "content": user_content},
         ]
         if assistant_prefix:
-            messages.append({"role": "assistant", "content": assistant_prefix, "prefix": True})
-        # 最终追加一个空的 assistant 前缀以强制从此处续写
+            # 将术语表/前缀放在一个普通的 assistant 消息中（不设置 prefix），
+            # 避免将非最终消息也设置为 prefix 导致服务器校验错误。
+            messages.append({"role": "assistant", "content": assistant_prefix})
+        # 最终追加一个空的 assistant 前缀以强制从此处续写（仅最后一条设置 prefix=True）
         messages.append({"role": "assistant", "content": "", "prefix": True})
 
         if stream:

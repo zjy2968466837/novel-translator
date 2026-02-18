@@ -215,6 +215,8 @@ class TranslatorEngine:
         self.on_chapter_start: Optional[Callable] = None
         # 流式回调（接收流式 chunk）
         self.on_stream: Optional[Callable] = None
+        # 暂停后下次启动时是否重新加载外部配置
+        self._pending_reload_on_start: bool = False
 
     # ── 日志 ──
 
@@ -998,9 +1000,57 @@ class TranslatorEngine:
     # ── 翻译主流程 ──
 
     def start_translation(self):
+        # 如果之前暂停并可能修改了外部配置文件，则在新启动前尝试重新加载配置
+        if getattr(self, '_pending_reload_on_start', False):
+            try:
+                self.reload_config_from_file()
+            except Exception:
+                pass
+            self._pending_reload_on_start = False
+
         thread = threading.Thread(target=self._run_translation, daemon=True)
         thread.start()
         return thread
+
+    def reload_config_from_file(self, path: str = "translator_config.json"):
+        """从 JSON 配置文件读取允许更新的翻译参数并应用到当前 `self.config`。
+
+        仅覆盖在 JSON 中出现且列入白名单的字段，避免意外重置。
+        """
+        if not os.path.exists(path):
+            self.log(f"ℹ️ 未找到配置文件: {path}")
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            self.log(f"⚠️ 读取配置文件失败: {e}")
+            return False
+
+        allowed = {
+            'provider', 'api_key', 'base_url', 'model_name', 'model_type',
+            'temperature', 'top_p', 'frequency_penalty', 'presence_penalty', 'max_tokens',
+            'chunk_size', 'concurrent_workers', 'retry_count',
+            'output_file', 'output_format', 'glossary_file',
+            'start_chapter', 'end_chapter', 'custom_prompt', 'context_lines',
+            'deepseek_beta', 'use_prefix_completion', 'use_fim_completion', 'stream_logs'
+        }
+
+        changed = []
+        for k, v in data.items():
+            if k in allowed and hasattr(self.config, k):
+                try:
+                    setattr(self.config, k, v)
+                    changed.append(k)
+                except Exception:
+                    pass
+
+        if changed:
+            self.log(f"✅ 已从 {path} 重新加载配置，更新项: {', '.join(changed)}")
+            return True
+        else:
+            self.log(f"ℹ️ 配置文件 {path} 无可更新项")
+            return False
 
     def _run_translation(self):
         try:
@@ -1125,6 +1175,8 @@ class TranslatorEngine:
         self._pause_event.clear()
         self.progress.is_paused = True
         self.log("⏸️ 已暂停")
+        # 标记在下次 start_translation 时重新加载外部配置（如 GUI 修改了 translator_config.json）
+        self._pending_reload_on_start = True
 
     def resume(self):
         self._pause_event.set()

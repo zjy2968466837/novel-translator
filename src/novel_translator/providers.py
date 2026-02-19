@@ -224,10 +224,14 @@ class OpenAIProvider(AIProvider):
         return self._translate_chat(system_prompt, user_content, assistant_prefix=assistant_prefix, stream=stream, stream_callback=stream_callback)
 
     def _translate_chat(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        # 将术语表/assistant_prefix 以 assistant 消息的形式放在 system 后，
+        # 这样模型在 chat 模式下通常不会将术语表直接输出到译文中。
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
         ]
+        if assistant_prefix:
+            messages.append({"role": "assistant", "content": assistant_prefix})
+        messages.append({"role": "user", "content": user_content})
         if stream:
             resp = self._client.chat.completions.create(
                 model=self.model_name,
@@ -307,15 +311,15 @@ class OpenAIProvider(AIProvider):
 
         注意：需要 base_url=DEEPSEEK_BETA_BASE_URL（https://api.deepseek.com/beta）。
         """
-        # 构建 messages：将术语表（若提供）放在 assistant 前缀中
+        # 构建 messages：将术语表（若提供）放在 user 之前，确保其对本轮翻译生效
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
         ]
         if assistant_prefix:
             # 将术语表/前缀放在一个普通的 assistant 消息中（不设置 prefix），
             # 避免将非最终消息也设置为 prefix 导致服务器校验错误。
             messages.append({"role": "assistant", "content": assistant_prefix})
+        messages.append({"role": "user", "content": user_content})
         # 最终追加一个空的 assistant 前缀以强制从此处续写（仅最后一条设置 prefix=True）
         messages.append({"role": "assistant", "content": "", "prefix": True})
 
@@ -461,8 +465,11 @@ class OpenAIProvider(AIProvider):
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         return text
 
-    def _translate_completion(self, system_prompt: str, user_content: str, *, stream: bool = False, stream_callback=None) -> str:
-        prompt_parts = [system_prompt, ""]
+    def _translate_completion(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        prompt_parts = [system_prompt]
+        if assistant_prefix:
+            prompt_parts.append(assistant_prefix)
+        prompt_parts.append("")
         if self.few_shot_examples:
             prompt_parts.append(self.few_shot_examples)
             prompt_parts.append("")
@@ -561,7 +568,9 @@ class AnthropicProvider(AIProvider):
             client_kwargs["base_url"] = self.base_url
         self._client = anthropic.Anthropic(**client_kwargs)
 
-    def translate(self, system_prompt: str, user_content: str) -> str:
+    def translate(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        if assistant_prefix:
+            system_prompt = f"{system_prompt}\n\n{assistant_prefix}"
         resp = self._client.messages.create(
             model=self.model_name,
             max_tokens=self.max_tokens,
@@ -580,6 +589,11 @@ class AnthropicProvider(AIProvider):
         result = "\n".join(text_parts)
         # 清理 thinking 标签
         result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+        if stream and stream_callback:
+            try:
+                stream_callback(result)
+            except Exception:
+                pass
         return result
 
     def test_connection(self) -> Tuple[bool, str]:
@@ -626,7 +640,9 @@ class GoogleProvider(AIProvider):
             ),
         )
 
-    def translate(self, system_prompt: str, user_content: str) -> str:
+    def translate(self, system_prompt: str, user_content: str, assistant_prefix: str | None = None, *, stream: bool = False, stream_callback=None) -> str:
+        if assistant_prefix:
+            system_prompt = f"{system_prompt}\n\n{assistant_prefix}"
         # 动态创建带 system_instruction 的模型
         model = self._genai.GenerativeModel(
             model_name=self.model_name,
@@ -638,7 +654,13 @@ class GoogleProvider(AIProvider):
             ),
         )
         resp = model.generate_content(user_content)
-        return resp.text.strip()
+        text = resp.text.strip()
+        if stream and stream_callback:
+            try:
+                stream_callback(text)
+            except Exception:
+                pass
+        return text
 
     def test_connection(self) -> Tuple[bool, str]:
         try:

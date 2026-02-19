@@ -218,11 +218,115 @@ class TranslatorEngine:
         # 暂停后下次启动时是否重新加载外部配置
         self._pending_reload_on_start: bool = False
 
+    # ── 术语表/回显清理辅助 ──
+
+    @staticmethod
+    def _is_glossary_line(line: str) -> bool:
+        return bool(re.match(r'^\s*[-•]?\s*.+\s*(?:->|→|＝|=)\s*.+$', line))
+
+    @staticmethod
+    def _is_prompt_header_line(line: str) -> bool:
+        return bool(re.match(
+            r'^[\s\[【]*'
+            r'(?:待翻译(?:原文|文本|内容)?|原文|源文|译文(?:本)?|翻译(?:文本|结果|内容)?)'
+            r'[\s\]】]*[:：]?\s*$',
+            line
+        ))
+
+    @staticmethod
+    def _is_non_story_meta_line(line: str) -> bool:
+        text = (line or "").strip()
+        if not text:
+            return False
+        lower = text.lower()
+        meta_keywords = (
+            "评价", "感想", "错别字", "反馈", "收藏", "点赞", "打赏", "评论",
+            "レビュー", "感想", "誤字", "評価", "ブックマーク", "ポイント", "いいね",
+        )
+        hit_count = sum(1 for kw in meta_keywords if kw in text)
+        if hit_count >= 2:
+            return True
+        if lower.startswith("如果您能给予评价") or lower.startswith("よろしければ評価"):
+            return True
+        if "http://" in lower or "https://" in lower:
+            return True
+        return False
+
+    def _looks_like_prompt_echo(self, text: str, original_text: str) -> bool:
+        if not text or not text.strip():
+            return True
+
+        # 明显提示词/术语表回显
+        if re.search(r'(强制术语表|术语表|待翻译|原文|译文|翻译文本|翻译结果)', text):
+            return True
+
+        # 术语表样式行过多
+        glossary_hits = sum(1 for ln in text.splitlines() if self._is_glossary_line(ln))
+        if glossary_hits >= 3:
+            return True
+
+        # 输出包含原文片段
+        ot = (original_text or "").strip()
+        if ot:
+            sample = ot[:80].strip()
+            if sample and sample in text:
+                return True
+            for ln in ot.splitlines():
+                ln = ln.strip()
+                if len(ln) >= 8 and ln in text:
+                    return True
+
+        # 日文假名占比过高，疑似原文回显
+        kana = sum(1 for ch in text if '\u3040' <= ch <= '\u30ff')
+        alpha = sum(1 for ch in text if ch.isalpha())
+        if alpha > 0 and (kana / alpha) > 0.10:
+            return True
+
+        return False
+
+    def _fallback_translate_without_prefix(self, user_content: str) -> str:
+        """检测到回显时的回退策略：临时关闭 prefix 续写并重试一次。"""
+        if not self.provider:
+            return ""
+        # 尝试关闭 prefix 续写
+        if hasattr(self.provider, "use_prefix_completion"):
+            orig = getattr(self.provider, "use_prefix_completion", False)
+            try:
+                if orig:
+                    setattr(self.provider, "use_prefix_completion", False)
+                    return self.provider.translate(self.system_prompt, user_content, assistant_prefix="")
+            finally:
+                try:
+                    setattr(self.provider, "use_prefix_completion", orig)
+                except Exception:
+                    pass
+        # 普通重试（不带 assistant_prefix）
+        try:
+            return self.provider.translate(self.system_prompt, user_content, assistant_prefix="")
+        except Exception:
+            return ""
+
+    def _get_assistant_prefix(self) -> str:
+        # DeepSeek Beta 前缀续写更容易回显，术语表已并入 system_prompt，避免重复注入
+        if self.config.deepseek_beta and self.config.use_prefix_completion:
+            return ""
+        return self.build_assistant_glossary()
+
     # ── 日志 ──
 
     def log(self, message: str):
         if self.on_log:
-            self.on_log(message)
+            try:
+                self.on_log(message)
+            except UnicodeEncodeError:
+                # 某些控制台编码不支持 emoji/特殊字符，降级输出为可编码文本
+                import sys
+                enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+                safe = message.encode(enc, errors="ignore").decode(enc, errors="ignore")
+                try:
+                    self.on_log(safe)
+                except Exception:
+                    pass
 
     # ── Provider 初始化 ──
 
@@ -318,7 +422,12 @@ class TranslatorEngine:
                 "当原文出现全名时（如アネスト・グリージャー），译为\u201c安涅莉丝·格里杰尔\u201d。\n\n"
                 "翻译预设：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
             )
-        # 系统指令不再包含术语表，术语表将放入助手前缀（assistant prefix）以便与 DeepSeek 前缀续写配合使用。
+        # 将术语表合并到 system prompt，确保各类模型/接口均能稳定获取术语约束。
+        g = glossary_dict if glossary_dict is not None else self.glossary
+        glossary_block = self.build_assistant_glossary(g)
+        if glossary_block:
+            base_prompt = base_prompt.rstrip()
+            base_prompt = f"{base_prompt}\n\n{glossary_block.strip()}"
         return base_prompt
 
     def build_assistant_glossary(self, glossary_dict: dict | None = None) -> str:
@@ -593,15 +702,31 @@ class TranslatorEngine:
                         except Exception:
                             pass
 
-                    assistant_pref = self.build_assistant_glossary()
+                    assistant_pref = self._get_assistant_prefix()
                     result = self.provider.translate(self.system_prompt, user_content, assistant_prefix=assistant_pref, stream=True, stream_callback=_stream_cb)
                     # 如果 provider 返回了最终合并结果，优先使用；否则合并 acc
                     if not result and acc:
                         result = "".join(acc)
                 else:
-                    assistant_pref = self.build_assistant_glossary()
+                    assistant_pref = self._get_assistant_prefix()
                     result = self.provider.translate(self.system_prompt, user_content, assistant_prefix=assistant_pref)
-                return result
+                # 尝试清理模型可能回显的提示词/术语表/原文，防止注入到最终译文中
+                try:
+                    cleaned = self._clean_model_output(result, text)
+                except Exception:
+                    cleaned = result
+                # 若检测到回显，回退到非前缀续写再试一次
+                if self._looks_like_prompt_echo(cleaned, text):
+                    self.log("⚠️ 检测到提示词/术语表回显，尝试回退模式重试一次")
+                    fallback = self._fallback_translate_without_prefix(user_content)
+                    if fallback:
+                        try:
+                            cleaned_fb = self._clean_model_output(fallback, text)
+                        except Exception:
+                            cleaned_fb = fallback
+                        if not self._looks_like_prompt_echo(cleaned_fb, text):
+                            return cleaned_fb
+                return cleaned
             except Exception as e:
                 err_detail = self._format_api_error(e)
                 self.log(f"⚠️ API 调用失败 (尝试 {attempt+1}/{self.config.retry_count}): {err_detail}")
@@ -615,6 +740,80 @@ class TranslatorEngine:
                 else:
                     return f"\n[翻译失败: {err_detail}]\n"
         return "[翻译失败: 未知错误]"
+
+    def _clean_model_output(self, result: str, original_text: str) -> str:
+        """
+        清理模型输出中可能被回显的提示词、术语表或原文。
+        使用若干启发式规则：
+        - 若包含 '【译文】' 标记，则取其之后内容；
+        - 删除显式的术语表块（如以 '【强制术语表】' 开头的列表）；
+        - 若输出包含原文片段，则尝试移除原文；
+        - 去除常见的提示头（如 '翻译要求'）以及多余的前缀分隔符。
+        这些规则为防护性处理，避免将 meta 信息写入 checkpoint 或最终文件。
+        """
+        if not result:
+            return result
+        text = result.replace("\r\n", "\n").replace("\r", "\n")
+
+        # 优先截取最后一个“译文”标记之后的内容（兼容多种写法）
+        m_last = None
+        for m in re.finditer(r"(?:^|\n)\s*[\[【]?\s*译文\s*[\]】]?\s*[:：]?\s*", text):
+            m_last = m
+        if m_last:
+            text = text[m_last.end():]
+
+        # 删除强制术语表块（显式标题）
+        if "术语表" in text:
+            lines = text.splitlines()
+            out_lines = []
+            skip = False
+            for ln in lines:
+                if "术语表" in ln:
+                    skip = True
+                    continue
+                if skip:
+                    if ln.strip() == "":
+                        skip = False
+                        continue
+                    if self._is_glossary_line(ln):
+                        continue
+                    skip = False
+                out_lines.append(ln)
+            text = "\n".join(out_lines)
+
+        # 删除散落的术语表行（无标题回显）
+        lines = text.splitlines()
+        glossary_hits = [i for i, ln in enumerate(lines) if self._is_glossary_line(ln)]
+        if glossary_hits:
+            near_head = sum(1 for i in glossary_hits if i < 30)
+            if near_head >= 2 or len(glossary_hits) >= 4:
+                lines = [ln for ln in lines if not self._is_glossary_line(ln)]
+                text = "\n".join(lines)
+
+        # 删除常见提示头行
+        lines = [ln for ln in text.splitlines() if not self._is_prompt_header_line(ln)]
+        text = "\n".join(lines)
+
+        # 若包含原文（或前文标记），尝试逐行移除原文片段
+        try:
+            ot = (original_text or "").strip()
+            if ot:
+                for ln in [l.strip() for l in ot.splitlines() if l.strip()]:
+                    if len(ln) >= 4 and ln in text:
+                        text = text.replace(ln, "")
+        except Exception:
+            pass
+
+        # 删除常见提示区域（例如以 '翻译要求' 开头的一段）
+        text = re.sub(r"翻译要求[:：\s\S]*?(?:\n\s*\n)", "", text)
+
+        # 去除前导分割符与多余符号
+        text = re.sub(r'^[\s\-_=#\*\[\]]+', '', text).strip()
+
+        # 收敛多余空行
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        return text
 
     # ── 错误格式化 ──
 
@@ -683,6 +882,16 @@ class TranslatorEngine:
         seen_names = set()
         for idx, item in enumerate(items):
             name = item.get_name()
+            lower_name = name.lower() if isinstance(name, str) else str(name).lower()
+            base_name = os.path.basename(lower_name)
+            if base_name in {
+                "nav.xhtml", "nav.html",
+                "toc.xhtml", "toc.html",
+                "cover.xhtml", "cover.html",
+                "titlepage.xhtml", "titlepage.html",
+                "copyright.xhtml", "copyright.html",
+            }:
+                continue
             if name in seen_names:
                 continue
             seen_names.add(name)
@@ -702,12 +911,15 @@ class TranslatorEngine:
         if not text or n_lines <= 0:
             return ""
         lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+        filtered = [l for l in lines if not self._is_non_story_meta_line(l)]
+        if filtered:
+            lines = filtered
         tail = lines[-n_lines:] if len(lines) > n_lines else lines
         return "\n".join(tail)
 
     # ── 分块翻译 ──
 
-    def _translate_chunks(self, chunks: list[str]) -> list[str]:
+    def _translate_chunks(self, chunks: list[str], initial_prev_ctx: str = "") -> list[str]:
         results = [None] * len(chunks)
         context_lines = self.config.context_lines
 
@@ -722,7 +934,7 @@ class TranslatorEngine:
 
         workers = min(self.config.concurrent_workers, len(chunks))
         if workers <= 1:
-            prev_ctx = ""
+            prev_ctx = initial_prev_ctx if context_lines > 0 else ""
             for i, chunk in enumerate(chunks):
                 if self.progress.is_cancelled:
                     break
@@ -732,7 +944,7 @@ class TranslatorEngine:
         else:
             if context_lines > 0:
                 self.log("💡 并发模式下上下文注入仅在批次间生效")
-            batch_prev_ctx = ""
+            batch_prev_ctx = initial_prev_ctx if context_lines > 0 else ""
             for batch_start in range(0, len(chunks), workers):
                 batch_end = min(batch_start + workers, len(chunks))
                 batch = list(enumerate(chunks[batch_start:batch_end], start=batch_start))
@@ -823,7 +1035,7 @@ class TranslatorEngine:
                         prompt = (
                             f"将以下书名翻译为简洁的中文书名，仅返回翻译结果，不添加注释或括号：\n\n{orig_title}"
                         )
-                        assistant_pref = self.build_assistant_glossary()
+                        assistant_pref = self._get_assistant_prefix()
                         try:
                             translated = self.provider.translate(self.system_prompt, prompt, assistant_prefix=assistant_pref)
                         except Exception:
@@ -1060,7 +1272,7 @@ class TranslatorEngine:
 
             self._init_provider()
             self.glossary = self.load_glossary()
-            self.system_prompt = self.build_system_prompt()
+            self.system_prompt = self.build_system_prompt(self.glossary)
 
             self.log(f"📖 正在读取: {os.path.basename(self.config.input_file)}")
             chapters = self.get_chapters()
@@ -1098,6 +1310,7 @@ class TranslatorEngine:
                 os.makedirs(output_dir, exist_ok=True)
 
             chapters_data = []
+            chapter_prev_ctx = ""
 
             for i, chapter in enumerate(target_chapters):
                 if self.progress.is_cancelled:
@@ -1119,6 +1332,8 @@ class TranslatorEngine:
                     chapters_data.append((chapter.name, cached))
                     self.log(f"⏩ [{i+1}/{len(target_chapters)}] {chapter.name} (已缓存)")
                     self.progress.translated_chars += len(cached)
+                    if self.config.context_lines > 0 and cached:
+                        chapter_prev_ctx = self._get_context_tail(cached, self.config.context_lines)
                     self.progress.elapsed_time = time.time() - self.progress.start_time
                     if self.on_progress:
                         self.on_progress(self.progress)
@@ -1130,9 +1345,11 @@ class TranslatorEngine:
 
                 chunks = self.split_text(chapter.content)
                 self.progress.total_chunks = len(chunks)
-                translated_parts = self._translate_chunks(chunks)
+                translated_parts = self._translate_chunks(chunks, initial_prev_ctx=chapter_prev_ctx)
                 translated_content = "\n".join(translated_parts)
                 chapters_data.append((chapter.name, translated_content))
+                if self.config.context_lines > 0 and translated_content:
+                    chapter_prev_ctx = self._get_context_tail(translated_content, self.config.context_lines)
 
                 if self.config.enable_checkpoint and self.checkpoint:
                     self.checkpoint.mark_chapter_done(chapter.name, translated_content)
@@ -1367,7 +1584,7 @@ class TranslatorEngine:
 
         self._init_provider()
         self.glossary = self.load_glossary()
-        self.system_prompt = self.build_system_prompt()
+        self.system_prompt = self.build_system_prompt(self.glossary)
         self.progress.is_cancelled = False
 
         for idx, ch_name in enumerate(valid_names):
@@ -1386,7 +1603,7 @@ class TranslatorEngine:
             translated_parts = []
             if getattr(self.provider, 'deepseek_beta', False) and getattr(self.provider, 'use_fim_completion', False):
                 self.log("💡 使用 FIM 补全进行选择性重翻（若模型支持）")
-                assistant_pref = self.build_assistant_glossary()
+                assistant_pref = self._get_assistant_prefix()
                 for c in chunks:
                     if self.progress.is_cancelled:
                         break

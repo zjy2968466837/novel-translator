@@ -56,3 +56,12 @@ launcher.out
 # Ignore embedded/third-party repos that shouldn't be tracked as files
 brave-search-mcp/
 mcp-browser-use/
+
+# Local assistant / MCP metadata
+.ai/
+mcp_host.json
+
+# Local audit artifacts
+audit_*.json
+audit_*.txt
+scripts/*_result.txt

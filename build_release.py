@@ -39,7 +39,7 @@ def precompile_sources():
         shutil.copy2(src_path, os.path.join(BUILD_SRC, fname))
         pyc_path = os.path.join(BUILD_SRC, fname + "c")
         py_compile.compile(src_path, pyc_path, doraise=True)
-        print(f"  ✓ {fname} -> {fname}c")
+        print(f"  [OK] {fname} -> {fname}c")
 
     print(f"\n  预编译完成，输出目录: {BUILD_SRC}")
 
@@ -61,9 +61,9 @@ def run_pyinstaller():
         env=env,
     )
     if result.returncode != 0:
-        print("\n  ✗ PyInstaller 打包失败！")
+        print("\n  [ERROR] PyInstaller 打包失败！")
         sys.exit(1)
-    print("\n  ✓ 打包完成")
+    print("\n  [OK] 打包完成")
 
 
 def create_release_zip():
@@ -72,7 +72,7 @@ def create_release_zip():
 
     dist_dir = os.path.join(PROJECT_ROOT, "dist", "NovelTranslator")
     if not os.path.isdir(dist_dir):
-        print("  ✗ dist/NovelTranslator 目录不存在，请先确认打包成功")
+        print("  [ERROR] dist/NovelTranslator 目录不存在，请先确认打包成功")
         sys.exit(1)
 
     # 复制附带文件
@@ -92,8 +92,8 @@ def create_release_zip():
 
     final_zip = zip_path + ".zip"
     size_mb = os.path.getsize(final_zip) / 1024 / 1024
-    print(f"  ✓ 发行包: {final_zip}")
-    print(f"  ✓ 大小: {size_mb:.1f} MB")
+    print(f"  [OK] 发行包: {final_zip}")
+    print(f"  [OK] 大小: {size_mb:.1f} MB")
 
 
 def cleanup():
@@ -114,7 +114,7 @@ def main():
     finally:
         cleanup()
 
-    step("构建完成 🎉")
+    step("构建完成")
     print("  发行文件位于 dist/ 目录")
     print("  将 dist/NovelTranslator 文件夹或 .zip 分发给用户即可")
 

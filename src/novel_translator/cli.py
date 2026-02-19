@@ -8,8 +8,34 @@ novel_translator.cli - 命令行翻译入口
 
 import argparse
 import sys
+import os
+import re
 
 from novel_translator.engine import TranslatorEngine, TranslationConfig
+
+
+def _strip_leading_xx_prefix(stem: str) -> str:
+    """Remove leading short serial prefixes like '01.', 'AB-', 'Vol.1-'."""
+    if not stem:
+        return stem
+    # Apply repeatedly so patterns like "01.Vol.1-" are handled.
+    s = stem.strip()
+    for _ in range(3):
+        new_s = re.sub(r"^\s*[A-Za-z0-9]{1,12}[.\-_\s、．。]+", "", s)
+        if new_s == s:
+            break
+        s = new_s.strip()
+    return s or stem
+
+
+def _default_output_path(input_file: str, fmt: str) -> str:
+    ext = ".epub" if fmt == "epub" else ".txt"
+    in_dir = os.path.dirname(input_file)
+    in_stem = os.path.splitext(os.path.basename(input_file))[0]
+    clean_stem = _strip_leading_xx_prefix(in_stem)
+    # 添加前缀zh_以标识这是中文翻译
+    prefixed_stem = f"zh_{clean_stem}"
+    return os.path.join(in_dir, f"{prefixed_stem}{ext}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- translate (默认) ----
     tr = sub.add_parser("translate", help="命令行翻译")
     tr.add_argument("input", help="输入 EPUB 文件路径")
-    tr.add_argument("-o", "--output", default=None, help="输出文件路径 (默认 <input>_translated.<fmt>)")
+    tr.add_argument("-o", "--output", default=None, help="输出文件路径 (默认 <去前缀xx的input名>.<fmt>)")
     tr.add_argument("-f", "--format", choices=["txt", "epub"], default="txt", help="输出格式 (默认 txt)")
     tr.add_argument("--api-key", required=True, help="OpenAI 兼容 API Key")
     tr.add_argument("--base-url", default="https://api.siliconflow.cn/v1", help="API 地址")
@@ -84,8 +110,6 @@ def main():
         sys.exit(0)
 
     # ---- translate 子命令 ----
-    import os
-
     input_file = args.input
     if not os.path.exists(input_file):
         print(f"❌ 输入文件不存在: {input_file}")
@@ -93,9 +117,7 @@ def main():
 
     output_file = args.output
     if not output_file:
-        base = os.path.splitext(input_file)[0]
-        ext = ".epub" if args.format == "epub" else ".txt"
-        output_file = f"{base}_translated{ext}"
+        output_file = _default_output_path(input_file, args.format)
 
     cfg = TranslationConfig(
         api_key=args.api_key,

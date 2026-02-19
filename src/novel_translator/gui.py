@@ -18,6 +18,7 @@ import os
 import time
 import json
 import threading
+import re
 
 import flet as ft
 
@@ -190,6 +191,34 @@ def _add_to_history(hist, key, value, max_items=10):
     hist[key] = lst[:max_items]
 
 
+def _strip_leading_xx_prefix(stem: str) -> str:
+    """Remove short serial prefixes like '01.', 'AB-', 'Vol.1-' in default output names."""
+    if not stem:
+        return stem
+    s = stem.strip()
+    for _ in range(3):
+        new_s = re.sub(r"^\s*[A-Za-z0-9]{1,12}[.\-_\s、．。]+", "", s)
+        if new_s == s:
+            break
+        s = new_s.strip()
+    return s or stem
+
+
+def _default_output_name_for_input(input_path: str, fmt: str) -> str:
+    ext = ".epub" if (fmt or "").lower() == "epub" else ".txt"
+    in_dir = os.path.dirname(input_path or "")
+    in_stem = os.path.splitext(os.path.basename(input_path or ""))[0]
+    clean_stem = _strip_leading_xx_prefix(in_stem) or "novel"
+    # 添加前缀zh_以标识这是中文翻译
+    prefixed_stem = f"zh_{clean_stem}"
+    return os.path.join(in_dir, f"{prefixed_stem}{ext}")
+
+
+def _fallback_output_filename(fmt: str) -> str:
+    ext = ".epub" if (fmt or "").lower() == "epub" else ".txt"
+    return f"novel{ext}"
+
+
 # =========================================================
 # 主界面
 # =========================================================
@@ -234,6 +263,7 @@ def main(page: ft.Page):
 
     def get_config():
         cfg = TranslationConfig()
+        fmt = (format_dropdown.value or "TXT").lower()
         cfg.provider = provider_dropdown.value or "openai"
         cfg.api_key = api_key_field.value or ""
         cfg.base_url = api_url_field.value or "https://api.siliconflow.cn/v1"
@@ -250,10 +280,9 @@ def main(page: ft.Page):
         cfg.context_lines = int(context_slider.value)
         cfg.concurrent_workers = int(concurrent_slider.value)
         cfg.input_file = input_file_field.value or ""
-        cfg.output_file = output_file_field.value or "novel_translated.txt"
+        cfg.output_file = output_file_field.value or _fallback_output_filename(fmt)
         cfg.glossary_file = glossary_file_field.value or ""
         cfg.enable_checkpoint = checkpoint_switch.value
-        fmt = (format_dropdown.value or "TXT").lower()
         cfg.output_format = fmt
         style_name = style_dropdown.value or "经典风格 (推荐)"
         if style_name == "自定义":
@@ -340,9 +369,21 @@ def main(page: ft.Page):
         resume_btn.disabled = True
         pause_btn.disabled = True
         cancel_btn.disabled = True
-        progress_bar.value = 1.0
-        progress_text.value = "✅ 翻译完成!"
-        show_snackbar(f"✅ 翻译完成！用时 {progress.elapsed_time:.1f} 秒")
+        
+        # 检查输出文件是否存在
+        cfg = get_config()
+        output_exists = os.path.exists(cfg.output_file) and os.path.getsize(cfg.output_file) > 0
+        
+        if output_exists and progress.translated_chars > 0:
+            progress_bar.value = 1.0
+            progress_text.value = "✅ 翻译完成!"
+            show_snackbar(f"✅ 翻译完成！用时 {progress.elapsed_time:.1f} 秒")
+        else:
+            # 文件不存在或为空，或者没有翻译任何字符
+            progress_bar.value = 0.0
+            progress_text.value = "⚠️ 翻译完成但无输出"
+            show_snackbar("⚠️ 翻译完成但未生成有效输出文件")
+        
         try:
             page.update()
         except Exception:
@@ -389,10 +430,8 @@ def main(page: ft.Page):
         if files:
             path = files[0].path
             input_file_field.value = path
-            base = os.path.splitext(path)[0]
             fmt = (format_dropdown.value or "TXT").lower()
-            ext = ".epub" if fmt == "epub" else ".txt"
-            output_file_field.value = base + "_translated" + ext
+            output_file_field.value = _default_output_name_for_input(path, fmt)
             page.update()
             _load_chapters()
             save_ui_config()
@@ -404,7 +443,8 @@ def main(page: ft.Page):
             show_snackbar(f"❌ 目录选择失败: {ex}")
             return
         if path:
-            fname = os.path.basename(output_file_field.value or "novel_translated.txt")
+            fmt = (format_dropdown.value or "TXT").lower()
+            fname = os.path.basename(output_file_field.value or _fallback_output_filename(fmt))
             output_file_field.value = os.path.join(path, fname)
             page.update()
             save_ui_config()
@@ -427,9 +467,43 @@ def main(page: ft.Page):
             eng = TranslatorEngine(cfg)
             chapters = eng.get_chapters()
             chapter_info_text.value = f"共 {len(chapters)} 个有效章节"
-            end_chapter_field.value = str(len(chapters))
-            if not start_chapter_field.value or start_chapter_field.value == "0":
-                start_chapter_field.value = "1"
+            total_chapters = len(chapters)
+            end_chapter_field.value = str(total_chapters)
+            
+            # 校正超出范围的章节号
+            start_val = 1
+            if start_chapter_field.value and start_chapter_field.value != "0":
+                try:
+                    start_val = int(start_chapter_field.value)
+                except ValueError:
+                    start_val = 1
+            
+            # 修正超出范围的起始章节号
+            if start_val < 1:
+                start_val = 1
+            elif start_val > total_chapters and total_chapters > 0:
+                start_val = total_chapters
+                show_snackbar(f"⚠️ 起始章节超出范围，已修正为 {total_chapters}")
+                
+            start_chapter_field.value = str(start_val)
+            
+            # 修正结束章节号
+            end_val = total_chapters
+            if end_chapter_field.value and end_chapter_field.value != "0":
+                try:
+                    end_val = int(end_chapter_field.value)
+                except ValueError:
+                    end_val = total_chapters
+            
+            if end_val > total_chapters:
+                end_val = total_chapters
+                show_snackbar(f"⚠️ 结束章节超出范围，已修正为 {total_chapters}")
+            elif end_val < start_val and start_val > 0:
+                end_val = total_chapters  # 重置为最大值
+                show_snackbar(f"⚠️ 结束章节小于起始章节，已重置为最大值")
+                
+            end_chapter_field.value = str(end_val)
+            
             page.update()
         except Exception as ex:
             chapter_info_text.value = f"读取失败: {ex}"
@@ -1067,7 +1141,7 @@ def main(page: ft.Page):
     )
     output_file_field = ft.TextField(
         label="输出文件", prefix_icon=ft.Icons.SAVE_ALT,
-        value=saved.get("output_file", "novel_translated.txt"),
+        value=saved.get("output_file", "novel.txt"),
         border_radius=10, filled=True, expand=True, on_blur=_on_field_blur,
     )
     format_dropdown = ft.Dropdown(

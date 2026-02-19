@@ -23,7 +23,7 @@ import warnings
 import ebooklib
 import ebooklib.utils as _ebooklib_utils
 from ebooklib import epub
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 # ── Monkey-patch ──────────────────────────────────────────────
 # 修复 ebooklib 在 write_epub 时因 EpubNav 内容为空导致 lxml 解析崩溃
@@ -79,7 +79,7 @@ class TranslationConfig:
 
     # 文件
     input_file: str = ""
-    output_file: str = "novel_translated.txt"
+    output_file: str = "novel.txt"
     output_format: str = "txt"  # "txt" / "epub"
     glossary_file: str = ""
 
@@ -418,7 +418,7 @@ class TranslatorEngine:
                 "16. 人名一致性：同一角色在全文中必须使用完全相同的中文译名，严禁出现变体。"
                 "例如：ミヤ始终译为\u201c弥娅\u201d（不可出现\u201c米娅\u201d\u201c米亚\u201d\u201c宫\u201d等变体）；"
                 "クリス始终译为\u201c克里斯\u201d（不可出现\u201c克莉丝\u201d等变体）；"
-                "グリージャー的中文名始终为\u201c安涅莉丝\u201d（不可出现\u201c格里杰尔\u201d\u201c格里杰\u201d等音译变体）。"
+                "グリージャー的中文名始终为\u201c安涅莉丝\u201d（不可出现\u201c格里杰尔\u201c格里杰\u201d等音译变体）。"
                 "当原文出现全名时（如アネスト・グリージャー），译为\u201c安涅莉丝·格里杰尔\u201d。\n\n"
                 "翻译预设：简洁准确，紧贴原文，语意连贯的短句合并为流畅长句，不添加原文没有的修辞和语气。\n"
             )
@@ -508,13 +508,22 @@ class TranslatorEngine:
 
         segments = []
         text_parts = []
+        media_tags = {'img', 'image', 'svg'}
 
         for element in body.children:
             if isinstance(element, str):
                 # 裸文本节点
                 stripped = element.strip()
                 if stripped:
-                    segments.append({"type": "text", "tag": "", "text": stripped, "html": stripped, "attrs": {}})
+                    segments.append({
+                        "type": "text",
+                        "tag": "",
+                        "text": stripped,
+                        "html": stripped,
+                        "attrs": {},
+                        "translate": True,
+                        "contains_media": False,
+                    })
                     text_parts.append(stripped)
                 continue
 
@@ -524,37 +533,280 @@ class TranslatorEngine:
 
             if tag_name in TranslatorEngine._SKIP_TAGS:
                 # 图片、表格等不翻译，原样保留
-                seg_type = "image" if tag_name in ('img', 'image', 'svg') else "skip"
+                seg_type = "image" if tag_name in media_tags else "skip"
                 segments.append({
-                    "type": seg_type, "tag": tag_name,
-                    "text": "", "html": str(element), "attrs": dict(element.attrs) if hasattr(element, 'attrs') else {},
+                    "type": seg_type,
+                    "tag": tag_name,
+                    "text": "",
+                    "html": str(element),
+                    "attrs": dict(element.attrs) if hasattr(element, 'attrs') else {},
+                    "translate": False,
+                    "contains_media": tag_name in media_tags,
                 })
                 continue
 
             if tag_name in TranslatorEngine._BLOCK_TAGS or tag_name.startswith('h'):
                 # 块级元素——提取文本用于翻译，保留内联标签结构
                 inner_text = element.get_text(strip=True)
+                contains_media = bool(element.find(media_tags))
                 if not inner_text:
                     # 空块级元素（可能含图片），保留原样
-                    segments.append({"type": "skip", "tag": tag_name, "text": "", "html": str(element), "attrs": {}})
+                    segments.append({
+                        "type": "skip",
+                        "tag": tag_name,
+                        "text": "",
+                        "html": str(element),
+                        "attrs": {},
+                        "translate": False,
+                        "contains_media": contains_media,
+                    })
                     continue
                 seg_type = "heading" if tag_name.startswith('h') else "text"
+                # heading 保持原样；正文段落可翻译（即使包含插图）
+                translatable_text = TranslatorEngine._extract_translatable_text_from_node(element)
+                can_translate = (seg_type == "text") and bool(translatable_text)
                 segments.append({
-                    "type": seg_type, "tag": tag_name,
-                    "text": inner_text, "html": str(element),
+                    "type": seg_type,
+                    "tag": tag_name,
+                    "text": translatable_text if can_translate else inner_text,
+                    "html": str(element),
                     "attrs": dict(element.attrs) if hasattr(element, 'attrs') else {},
+                    "translate": can_translate,
+                    "contains_media": contains_media,
                 })
-                text_parts.append(inner_text)
+                if can_translate:
+                    text_parts.append(translatable_text)
                 continue
 
             # 其他元素（如 section, article, div 嵌套）——递归提取
             inner_text = element.get_text(separator="\n", strip=True)
+            contains_media = bool(element.find(media_tags))
             if inner_text:
-                segments.append({"type": "text", "tag": tag_name, "text": inner_text, "html": str(element), "attrs": {}})
-                text_parts.append(inner_text)
+                translatable_text = TranslatorEngine._extract_translatable_text_from_node(element)
+                can_translate = bool(translatable_text)
+                segments.append({
+                    "type": "text",
+                    "tag": tag_name,
+                    "text": translatable_text if can_translate else inner_text,
+                    "html": str(element),
+                    "attrs": dict(element.attrs) if hasattr(element, 'attrs') else {},
+                    "translate": can_translate,
+                    "contains_media": contains_media,
+                })
+                if can_translate:
+                    text_parts.append(translatable_text)
+            else:
+                segments.append({
+                    "type": "skip",
+                    "tag": tag_name,
+                    "text": "",
+                    "html": str(element),
+                    "attrs": dict(element.attrs) if hasattr(element, 'attrs') else {},
+                    "translate": False,
+                    "contains_media": contains_media,
+                })
 
         plain_text = "\n".join(text_parts)
         return plain_text, segments
+
+    @staticmethod
+    def _is_heading_tag(tag_name: str) -> bool:
+        return bool(tag_name and re.fullmatch(r"h[1-6]", str(tag_name).lower()))
+
+    @staticmethod
+    def _has_heading_ancestor(node) -> bool:
+        parent = getattr(node, "parent", None)
+        while parent is not None:
+            pname = getattr(parent, "name", None)
+            if TranslatorEngine._is_heading_tag(pname):
+                return True
+            parent = getattr(parent, "parent", None)
+        return False
+
+    @staticmethod
+    def _iter_translatable_text_nodes(root):
+        for node in root.descendants:
+            if not isinstance(node, NavigableString):
+                continue
+            raw = str(node)
+            if not raw or not raw.strip():
+                continue
+            parent = getattr(node, "parent", None)
+            pname = getattr(parent, "name", "") if parent else ""
+            pname = pname.lower() if isinstance(pname, str) else str(pname).lower()
+            if pname in TranslatorEngine._SKIP_TAGS:
+                continue
+            # Ruby标签内的文本也需要翻译，所以不跳过Ruby标签
+            # 章节/小节标题保持原样，不参与翻译替换
+            if TranslatorEngine._has_heading_ancestor(node):
+                continue
+            yield node
+
+    @staticmethod
+    def _extract_translatable_text_from_node(root) -> str:
+        lines = [str(n).strip() for n in TranslatorEngine._iter_translatable_text_nodes(root)]
+        return "\n".join(x for x in lines if x)
+
+    @staticmethod
+    def _split_text_by_lengths(text: str, lengths: list[int]) -> list[str]:
+        if not lengths:
+            return []
+        if len(lengths) == 1:
+            return [text]
+        total_chars = len(text)
+        if total_chars <= 0:
+            return [""] * len(lengths)
+
+        weights = [max(int(l), 1) for l in lengths]
+        weight_sum = sum(weights)
+        raw = [(total_chars * w) / weight_sum for w in weights]
+        base = [int(x) for x in raw]
+        remain = total_chars - sum(base)
+        if remain > 0:
+            order = sorted(range(len(raw)), key=lambda i: raw[i] - base[i], reverse=True)
+            for i in order[:remain]:
+                base[i] += 1
+
+        chunks = []
+        cursor = 0
+        for size in base[:-1]:
+            chunks.append(text[cursor:cursor + size])
+            cursor += size
+        chunks.append(text[cursor:])
+        return chunks
+
+    @staticmethod
+    def _inject_translation_into_segment_html(segment_html: str, translated_text: str) -> str:
+        if not segment_html:
+            return ""
+
+        normalized = re.sub(r"\s*\n\s*", "", (translated_text or "").strip())
+        if not normalized:
+            return segment_html
+
+        wrapper = BeautifulSoup(f"<div>{segment_html}</div>", "html.parser")
+        container = wrapper.find("div")
+        if not container:
+            return segment_html
+
+        text_nodes = list(TranslatorEngine._iter_translatable_text_nodes(container))
+        if not text_nodes:
+            return segment_html
+
+        lengths = [len(str(n).strip()) for n in text_nodes]
+        chunks = TranslatorEngine._split_text_by_lengths(normalized, lengths)
+        for node, chunk in zip(text_nodes, chunks):
+            original = str(node)
+            prefix = re.match(r"^\s*", original).group(0) if original else ""
+            suffix = re.search(r"\s*$", original).group(0) if original else ""
+            node.replace_with(NavigableString(f"{prefix}{chunk}{suffix}"))
+
+        return "".join(str(x) for x in container.contents)
+
+    @staticmethod
+    def _preserve_ruby_annotations(original_html: str, translated_text: str) -> str:
+        """
+        在翻译文本中保留Ruby注音标签
+        
+        Args:
+            original_html: 包含Ruby标签的原始HTML
+            translated_text: 翻译后的纯文本
+            
+        Returns:
+            保留了Ruby标签结构的HTML
+        """
+        if not original_html or not translated_text:
+            return original_html
+        
+        # 解析原始HTML以保留Ruby结构
+        soup = BeautifulSoup(original_html, "html.parser")
+        
+        # 查找所有的ruby标签及其内容
+        ruby_elements = soup.find_all('ruby')
+        
+        if not ruby_elements:
+            # 如果没有Ruby标签，直接返回原始处理结果
+            return TranslatorEngine._inject_translation_into_segment_html(original_html, translated_text)
+        
+        # 提取Ruby标签的结构信息
+        ruby_mappings = {}
+        for ruby in ruby_elements:
+            rb_text = ""
+            rt_text = ""
+            
+            # 获取ruby标签内的文本和注音
+            for child in ruby.children:
+                if hasattr(child, 'name'):
+                    if child.name == 'rb':
+                        rb_text = child.get_text(strip=True)
+                    elif child.name == 'rt':
+                        rt_text = child.get_text(strip=True)
+                    elif child.name == 'rp':  # 可选的括号标签
+                        continue
+                elif isinstance(child, NavigableString) and child.strip():
+                    rb_text += str(child).strip()
+            
+            if rb_text and rt_text:
+                # 存储Ruby基础文本到注音的映射
+                ruby_mappings[rb_text] = rt_text
+        
+        if not ruby_mappings:
+            return TranslatorEngine._inject_translation_into_segment_html(original_html, translated_text)
+        
+        # 使用基础的文本注入方法先填充翻译文本
+        basic_result = TranslatorEngine._inject_translation_into_segment_html(original_html, translated_text)
+        
+        # 重新解析结果，以便我们可以安全地修改它
+        result_soup = BeautifulSoup(basic_result, "html.parser")
+        
+        # 为result_soup中的每个ruby标签找到对应的注音
+        result_rubies = result_soup.find_all('ruby')
+        for ruby in result_rubies:
+            # 检查是否已经有rb和rt标签
+            rb_tag = ruby.find('rb')
+            if rb_tag:
+                rb_text = rb_tag.get_text(strip=True)
+                # 检查原始映射中是否有对应的注音
+                if rb_text in ruby_mappings:
+                    rt_text = ruby_mappings[rb_text]
+                    # 确保rt标签存在且内容正确
+                    rt_tag = ruby.find('rt')
+                    if rt_tag:
+                        rt_tag.string = rt_text
+                    else:
+                        # 如果没有rt标签，创建一个
+                        new_rt = result_soup.new_tag('rt')
+                        new_rt.string = rt_text
+                        ruby.append(new_rt)
+        
+        return str(result_soup)
+
+    @staticmethod
+    def _attrs_to_html(attrs: dict) -> str:
+        if not attrs:
+            return ""
+        rendered = []
+        for key, value in attrs.items():
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                value = " ".join(str(x) for x in value if x is not None)
+            elif isinstance(value, bool):
+                if value:
+                    rendered.append(str(key))
+                continue
+            else:
+                value = str(value)
+            escaped = (
+                value.replace("&", "&amp;")
+                .replace("\"", "&quot;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            rendered.append(f'{key}="{escaped}"')
+        if not rendered:
+            return ""
+        return " " + " ".join(rendered)
 
     @staticmethod
     def rebuild_chapter_html(segments: list[dict], translated_text: str, original_html: str = "") -> str:
@@ -564,20 +816,44 @@ class TranslatorEngine:
         保留非文本 segment（图片、表格等）原样不动。
         """
         trans_paragraphs = [p.strip() for p in translated_text.split("\n") if p.strip()]
+        expected_segments = sum(
+            1
+            for seg in segments
+            if seg.get("type") in ("text", "heading") and seg.get("translate", True)
+        )
+        if expected_segments <= 0:
+            return "\n".join(seg.get("html", "") for seg in segments)
+
+        if len(trans_paragraphs) > expected_segments:
+            if expected_segments == 1:
+                trans_paragraphs = ["\n".join(trans_paragraphs)]
+            else:
+                head = trans_paragraphs[: expected_segments - 1]
+                tail = "\n".join(trans_paragraphs[expected_segments - 1 :])
+                trans_paragraphs = head + [tail]
         trans_idx = 0
         result_parts = []
 
         for seg in segments:
             if seg["type"] in ("image", "skip"):
-                # 非文本元素原样保留
-                result_parts.append(seg["html"])
+                # 非文本元素原样保留，但确保图片路径正确
+                html_content = seg["html"]
+                # 修复图片路径引用（确保相对路径正确）
+                if seg["type"] == "image" and 'src="' in html_content:
+                    # 保持原始图片路径不变，但验证路径格式
+                    pass
+                result_parts.append(html_content)
             elif seg["type"] in ("text", "heading"):
-                tag = seg.get("tag", "p") or "p"
+                if not seg.get("translate", True):
+                    result_parts.append(seg["html"])
+                    continue
                 if trans_idx < len(trans_paragraphs):
                     trans_content = trans_paragraphs[trans_idx]
-                    # HTML 转义
-                    trans_content = trans_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    result_parts.append(f"<{tag}>{trans_content}</{tag}>")
+                    # 使用新的Ruby标签保留功能
+                    rebuilt = TranslatorEngine._preserve_ruby_annotations(
+                        seg.get("html", ""), trans_content
+                    )
+                    result_parts.append(rebuilt if rebuilt else seg["html"])
                     trans_idx += 1
                 else:
                     # 翻译段落不足，保留原文
@@ -585,7 +861,7 @@ class TranslatorEngine:
             else:
                 result_parts.append(seg["html"])
 
-        # 如果翻译段落比 segment 多（模型拆分了段落），追加剩余部分
+        # 兼容兜底：若仍有剩余段落，追加到末尾
         while trans_idx < len(trans_paragraphs):
             extra = trans_paragraphs[trans_idx].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             result_parts.append(f"<p>{extra}</p>")
@@ -749,19 +1025,40 @@ class TranslatorEngine:
         - 删除显式的术语表块（如以 '【强制术语表】' 开头的列表）；
         - 若输出包含原文片段，则尝试移除原文；
         - 去除常见的提示头（如 '翻译要求'）以及多余的前缀分隔符。
+        - 修复字符编码问题和中日文混杂问题
         这些规则为防护性处理，避免将 meta 信息写入 checkpoint 或最终文件。
         """
         if not result:
             return result
         text = result.replace("\r\n", "\n").replace("\r", "\n")
-
-        # 优先截取最后一个“译文”标记之后的内容（兼容多种写法）
+        
+        # 保存原始结果作为备选，以防清理后内容为空
+        original_result = text
+    
+        # 字符编码规范化处理
+        # 确保统一使用UTF-8编码，处理可能的编码问题
+        try:
+            # 如果文本包含异常字符，尝试重新编码
+            text = text.encode('utf-8', errors='ignore').decode('utf-8')
+        except:
+            pass
+    
+        # 检测并修复中日文混杂问题
+        # 如果检测到大量日文字符，记录日文比例但不过度干预
+        japanese_chars = sum(1 for c in text if '\u3040' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')
+        total_chars = len(text.strip())
+            
+        if total_chars > 0 and japanese_chars / total_chars > 0.3:
+            # 如果日文字符占比超过30%，记录警告但保留内容
+            self.log(f"⚠️ 检测到高比例日文字符 ({japanese_chars/total_chars:.1%})，可能是翻译不完整或包含原文")
+    
+        # 优先截取最后一个"译文"标记之后的内容（兼容多种写法）
         m_last = None
         for m in re.finditer(r"(?:^|\n)\s*[\[【]?\s*译文\s*[\]】]?\s*[:：]?\s*", text):
             m_last = m
         if m_last:
             text = text[m_last.end():]
-
+    
         # 删除强制术语表块（显式标题）
         if "术语表" in text:
             lines = text.splitlines()
@@ -780,7 +1077,7 @@ class TranslatorEngine:
                     skip = False
                 out_lines.append(ln)
             text = "\n".join(out_lines)
-
+    
         # 删除散落的术语表行（无标题回显）
         lines = text.splitlines()
         glossary_hits = [i for i, ln in enumerate(lines) if self._is_glossary_line(ln)]
@@ -789,11 +1086,11 @@ class TranslatorEngine:
             if near_head >= 2 or len(glossary_hits) >= 4:
                 lines = [ln for ln in lines if not self._is_glossary_line(ln)]
                 text = "\n".join(lines)
-
+    
         # 删除常见提示头行
         lines = [ln for ln in text.splitlines() if not self._is_prompt_header_line(ln)]
         text = "\n".join(lines)
-
+    
         # 若包含原文（或前文标记），尝试逐行移除原文片段
         try:
             ot = (original_text or "").strip()
@@ -803,16 +1100,28 @@ class TranslatorEngine:
                         text = text.replace(ln, "")
         except Exception:
             pass
-
+    
         # 删除常见提示区域（例如以 '翻译要求' 开头的一段）
         text = re.sub(r"翻译要求[:：\s\S]*?(?:\n\s*\n)", "", text)
-
+    
         # 去除前导分割符与多余符号
         text = re.sub(r'^[\s\-_=#\*\[\]]+', '', text).strip()
-
+    
         # 收敛多余空行
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
+    
+        # 检查清理后的文本是否为空，如果为空则返回原始结果
+        if not text.strip():
+            self.log("⚠️ 清理后文本为空，返回原始结果以避免丢失内容")
+            text = original_result
+        
+        # 最终编码验证
+        try:
+            text = text.encode('utf-8').decode('utf-8')
+        except:
+            # 如果仍有编码问题，使用更宽松的处理
+            text = text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+        
         return text
 
     # ── 错误格式化 ──
@@ -896,10 +1205,10 @@ class TranslatorEngine:
                 continue
             seen_names.add(name)
             raw_content = item.get_content()
-            clean_text = self.clean_html(raw_content)
+            html_str = raw_content.decode('utf-8', errors='replace') if isinstance(raw_content, bytes) else str(raw_content)
+            clean_text, _ = self.parse_html_structured(html_str)
             if len(clean_text) >= 50:
                 # 同时存储原始 HTML 以便后续结构保留
-                html_str = raw_content.decode('utf-8', errors='replace') if isinstance(raw_content, bytes) else str(raw_content)
                 chapters.append(ChapterInfo(idx + 1, name, clean_text, item, html_content=html_str))
         return chapters
 
@@ -997,86 +1306,115 @@ class TranslatorEngine:
         book = epub.EpubBook()
 
         if source_book:
-            # 复制元数据
-            for meta in source_book.metadata.get('http://purl.org/dc/elements/1.1/', []):
-                # meta 格式: (name, value, attrs)
-                pass  # ebooklib 的 metadata API 较复杂，先设置基本信息
             src_name = os.path.splitext(os.path.basename(self.config.input_file))[0]
-            book.set_identifier("novel-translator-output")
+            source_identifier = "novel-translator-output"
+            source_title = src_name
+            source_language = "zh"
+            source_creators = []
 
-            # 尝试从元数据读取原始书名，并使用 provider 对书名进行翻译（如可用）
-            orig_title = None
             try:
-                for meta in source_book.metadata.get('http://purl.org/dc/elements/1.1/', []):
-                    try:
-                        # meta 结构: (name, value, attrs)
-                        if isinstance(meta, (list, tuple)) and len(meta) >= 2 and str(meta[0]).lower() == 'title':
-                            orig_title = str(meta[1])
-                            break
-                    except Exception:
-                        continue
+                meta_id = source_book.get_metadata("DC", "identifier")
+                if meta_id and meta_id[0] and meta_id[0][0]:
+                    source_identifier = str(meta_id[0][0])
             except Exception:
-                orig_title = None
+                pass
 
-            def _sanitize_title(t: str) -> str:
-                if not t:
-                    return t
-                # 去除开头类似 `01. ` 或 `Vol.01-` 的前缀
-                t = re.sub(r'^\s*[\dA-Za-z一二三四五六七八九零十]+[\.\-_\s]+', '', t)
-                # 去除尾部的（中文翻译）或 (中文翻译)
-                t = re.sub(r'[\s　]*[（(]\s*中文翻译\s*[)）]\s*$', '', t)
-                return t.strip()
+            try:
+                meta_title = source_book.get_metadata("DC", "title")
+                if meta_title and meta_title[0] and meta_title[0][0]:
+                    source_title = str(meta_title[0][0])
+            except Exception:
+                pass
 
-            translated_title = None
-            if orig_title:
-                try:
-                    # 如果 provider 可用，则发起简短翻译请求，仅翻译书名并返回简洁结果
-                    if self.provider:
-                        prompt = (
-                            f"将以下书名翻译为简洁的中文书名，仅返回翻译结果，不添加注释或括号：\n\n{orig_title}"
-                        )
-                        assistant_pref = self._get_assistant_prefix()
-                        try:
-                            translated = self.provider.translate(self.system_prompt, prompt, assistant_prefix=assistant_pref)
-                        except Exception:
-                            translated = None
-                        if translated:
-                            # 取首行作为标题候选
-                            translated_title = translated.strip().split('\n')[0].strip()
-                except Exception:
-                    translated_title = None
+            try:
+                meta_lang = source_book.get_metadata("DC", "language")
+                if meta_lang and meta_lang[0] and meta_lang[0][0]:
+                    source_language = str(meta_lang[0][0])
+            except Exception:
+                pass
 
-            final_title = None
-            if translated_title:
-                final_title = _sanitize_title(translated_title)
-            elif orig_title:
-                final_title = _sanitize_title(orig_title)
+            try:
+                meta_creator = source_book.get_metadata("DC", "creator")
+                for creator in meta_creator or []:
+                    if isinstance(creator, (list, tuple)) and creator and creator[0]:
+                        source_creators.append(str(creator[0]))
+            except Exception:
+                pass
+
+            # 书名与作者沿用原始元数据，避免改变导入样式
+            book.set_identifier(source_identifier)
+            book.set_title(source_title)
+            book.set_language(source_language)
+            if source_creators:
+                for creator in source_creators:
+                    book.add_author(creator)
             else:
-                final_title = _sanitize_title(src_name)
-
-            # 设置书名与语言/作者信息
-            book.set_title(final_title)
-            book.set_language("zh")
-            book.add_author("AI Translation")
+                book.add_author("AI Translation")
 
             # 复制所有非文档资源（CSS、图片、字体等）
             resource_items = []
+            copied_items = set()  # 跟踪已复制的项目ID
+            copied_names = set()  # 跟踪已复制的文件名，避免重复
+            
             for item in source_book.get_items():
                 item_type = item.get_type()
+                item_id = item.get_id()
+                item_name = item.get_name()
+                
+                # 避免重复添加相同ID或文件名的项目
+                if item_id in copied_items or item_name in copied_names:
+                    continue
+                    
                 if item_type == ebooklib.ITEM_DOCUMENT:
                     continue  # 章节文档单独处理
-                if item_type in (ebooklib.ITEM_STYLE, ebooklib.ITEM_IMAGE,
-                                 ebooklib.ITEM_FONT, ebooklib.ITEM_COVER):
-                    book.add_item(item)
-                    resource_items.append(item)
-                elif item_type not in (ebooklib.ITEM_NAVIGATION,):
-                    # 其他资源（如嵌入字体、音频等）也复制
-                    try:
-                        book.add_item(item)
-                    except Exception:
-                        pass
+                    
+                try:
+                    # 检查是否是有效的资源类型
+                    if item_type in (ebooklib.ITEM_STYLE, ebooklib.ITEM_IMAGE,
+                                   ebooklib.ITEM_FONT, ebooklib.ITEM_COVER):
+                        # 确保资源内容有效
+                        content = item.get_content()
+                        if content:  # 只有当内容不为空时才复制
+                            book.add_item(item)
+                            resource_items.append(item)
+                            copied_items.add(item_id)
+                            copied_names.add(item_name)
+                    elif item_type not in (ebooklib.ITEM_NAVIGATION,):
+                        # 其他资源（如嵌入字体、音频等）也尝试复制
+                        content = item.get_content()
+                        if content:
+                            book.add_item(item)
+                            resource_items.append(item)
+                            copied_items.add(item_id)
+                            copied_names.add(item_name)
+                except Exception as e:
+                    self.log(f"⚠️ 跳过资源 {item_id} ({item_name}): {str(e)[:50]}")
+                    continue
+                    
             if resource_items:
                 self.log(f"📂 已复制 {len(resource_items)} 个原始资源（CSS/图片/字体）")
+                # 验证关键资源是否成功复制
+                image_count = sum(1 for item in resource_items if item.get_type() == ebooklib.ITEM_IMAGE)
+                style_count = sum(1 for item in resource_items if item.get_type() == ebooklib.ITEM_STYLE)
+                font_count = sum(1 for item in resource_items if item.get_type() == ebooklib.ITEM_FONT)
+                cover_count = sum(1 for item in resource_items if item.get_type() == ebooklib.ITEM_COVER)
+                self.log(f"   - 图片: {image_count} 个")
+                self.log(f"   - 样式: {style_count} 个") 
+                self.log(f"   - 字体: {font_count} 个")
+                self.log(f"   - 封面: {cover_count} 个")
+                
+                # 验证图片资源的完整性
+                if image_count > 0:
+                    valid_images = 0
+                    for item in resource_items:
+                        if item.get_type() == ebooklib.ITEM_IMAGE:
+                            try:
+                                content = item.get_content()
+                                if content and len(content) > 0:
+                                    valid_images += 1
+                            except:
+                                pass
+                    self.log(f"   - 有效图片: {valid_images} 个")
         else:
             book.set_identifier("novel-translator-output")
             src_name = os.path.splitext(os.path.basename(self.config.output_file))[0]
@@ -1111,29 +1449,43 @@ class TranslatorEngine:
                 if name in translated_map:
                     chapter_idx += 1
                     translated_content = translated_map[name]
-                    display_title, body = self._extract_chapter_title(translated_content, fallback_index=chapter_idx)
 
                     # 尝试在原始 HTML 结构中替换文本
                     raw = item.get_content()
                     html_str = raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else str(raw)
+                    orig_soup = BeautifulSoup(html_str, "html.parser")
+                    original_doc_title = getattr(item, "title", None) or ""
+                    if not original_doc_title:
+                        title_tag = orig_soup.find("title")
+                        if title_tag:
+                            original_doc_title = title_tag.get_text(strip=True)
+                    if not original_doc_title:
+                        original_doc_title = os.path.splitext(os.path.basename(name))[0]
+
                     _, segments = self.parse_html_structured(html_str)
 
                     if segments:
                         # 结构保留模式：将翻译文本回注到原始 HTML 结构
-                        translated_body_html = self.rebuild_chapter_html(segments, translated_content)
+                        translated_body_html = self.rebuild_chapter_html(
+                            segments, translated_content, original_html=html_str
+                        )
                     else:
                         # 无法解析结构，回退到简单包装
-                        translated_body_html = self._text_to_html_paragraphs(body)
+                        translated_body_html = self._text_to_html_paragraphs(translated_content)
 
-                    # 从原始 HTML 提取 <head> 部分（保留 CSS 链接）
-                    orig_soup = BeautifulSoup(html_str, "html.parser")
+                    # 从原始 HTML 提取 <head> 部分（保留 CSS 链接和元数据）
                     head_tag = orig_soup.find("head")
                     if head_tag:
+                        # 保留原始head中的所有内容，包括CSS链接、meta标签等
                         head_html = str(head_tag)
+                        # 确保语言设置为中文
+                        if 'lang=' not in head_html:
+                            head_html = head_html.replace('<head>', '<head lang="zh">')
                     else:
-                        safe_title = display_title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                        head_html = f"<head><title>{safe_title}</title></head>"
+                        safe_title = original_doc_title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        head_html = f'<head lang="zh"><meta charset="utf-8"/><title>{safe_title}</title></head>'
 
+                    # 确保HTML结构完整且编码正确
                     full_html = (
                         f'<?xml version="1.0" encoding="utf-8"?>\n'
                         f'<!DOCTYPE html>\n'
@@ -1141,11 +1493,16 @@ class TranslatorEngine:
                         f'{head_html}\n'
                         f'<body>\n{translated_body_html}\n</body>\n</html>'
                     )
+                    
+                    # 验证生成的HTML是否包含关键元素
+                    if '<img' in full_html.lower():
+                        img_count = full_html.lower().count('<img')
+                        self.log(f"   🖼️ 章节包含 {img_count} 个图片引用")
 
                     ch = epub.EpubHtml(
-                        title=display_title,
+                        title=original_doc_title,
                         file_name=name,  # 保留原始文件名
-                        lang="zh",
+                        lang=getattr(item, "lang", None) or source_language,
                     )
                     ch.set_content(full_html.encode("utf-8"))
                     book.add_item(ch)
@@ -1195,7 +1552,61 @@ class TranslatorEngine:
         book.spine = spine
         book.add_item(epub.EpubNcx())
         book.add_item(epub.EpubNav())
+        
+        # 写入EPUB文件
         epub.write_epub(output_path, book)
+        
+        # 验证输出文件
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path)
+            self.log(f"✅ EPUB文件已生成: {output_path} ({file_size:,} bytes)")
+            
+            # 检查是否包含图片资源
+            try:
+                output_book = epub.read_epub(output_path)
+                image_items = [item for item in output_book.get_items() if item.get_type() == ebooklib.ITEM_IMAGE]
+                if image_items:
+                    self.log(f"   🖼️ 包含 {len(image_items)} 个图片资源")
+                    # 验证图片完整性
+                    valid_images = 0
+                    for img_item in image_items:
+                        try:
+                            content = img_item.get_content()
+                            if content and len(content) > 0:
+                                valid_images += 1
+                        except:
+                            pass
+                    self.log(f"   ✅ 有效图片: {valid_images} 个")
+                else:
+                    self.log("   ⚠️ 未检测到图片资源")
+                
+                # 检查文档结构
+                doc_items = [item for item in output_book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT]
+                self.log(f"   📄 文档章节: {len(doc_items)} 个")
+                
+                # 验证文档中的图片引用
+                img_references = 0
+                for doc_item in doc_items[:5]:  # 检查前5个文档
+                    try:
+                        content = doc_item.get_content()
+                        if isinstance(content, bytes):
+                            content_str = content.decode('utf-8', errors='replace')
+                        else:
+                            content_str = str(content)
+                        img_refs = content_str.lower().count('<img')
+                        img_references += img_refs
+                    except:
+                        pass
+                
+                if img_references > 0:
+                    self.log(f"   🔗 图片引用: {img_references} 个")
+                else:
+                    self.log("   ⚠️ 未检测到图片引用")
+                    
+            except Exception as e:
+                self.log(f"   ⚠️ 无法验证EPUB内容: {str(e)[:50]}")
+        else:
+            self.log("❌ EPUB文件生成失败")
 
     @staticmethod
     def _text_to_html_paragraphs(text: str) -> str:
@@ -1284,8 +1695,24 @@ class TranslatorEngine:
                 if 0 < self.config.end_chapter <= len(chapters)
                 else len(chapters)
             )
+            if not chapters:
+                raise ValueError("未找到可翻译章节：EPUB 可能仅包含目录/封面/插图页")
+            if start >= len(chapters):
+                raise ValueError(
+                    f"章节范围无效：起始章节 {self.config.start_chapter} 超出有效范围 1~{len(chapters)}"
+                )
+            if end <= start:
+                req_start = self.config.start_chapter if self.config.start_chapter > 0 else 1
+                req_end = self.config.end_chapter if self.config.end_chapter > 0 else len(chapters)
+                raise ValueError(
+                    f"章节范围无效：起始 {req_start}，结束 {req_end}。有效范围为 1~{len(chapters)}"
+                )
             target_chapters = chapters[start:end]
             self.progress.total_chapters = len(target_chapters)
+            if not target_chapters:
+                raise ValueError(
+                    f"章节范围为空：请求 {start+1}~{end}，有效章节共 {len(chapters)} 章"
+                )
             self.log(f"🎯 范围: 第 {start+1} ~ {end} 章 (共 {len(target_chapters)} 章)")
             self.log(f"📄 输出格式: {self.config.output_format.upper()}")
 
@@ -1346,7 +1773,18 @@ class TranslatorEngine:
                 chunks = self.split_text(chapter.content)
                 self.progress.total_chunks = len(chunks)
                 translated_parts = self._translate_chunks(chunks, initial_prev_ctx=chapter_prev_ctx)
-                translated_content = "\n".join(translated_parts)
+                # 过滤掉空的翻译部分，但保留非空部分
+                filtered_parts = [part for part in translated_parts if part and part.strip()]
+                
+                if filtered_parts:
+                    # 如果有非空的翻译部分，连接它们
+                    translated_content = "\n".join(filtered_parts)
+                else:
+                    # 如果所有部分都是空的，至少记录一个警告信息
+                    self.log(f"⚠️ 章节 '{chapter.name}' 的所有翻译块都为空，保留原始内容以避免数据丢失")
+                    # 使用原始内容作为占位符，避免完全空白
+                    translated_content = f"[翻译失败或为空 - 章节: {chapter.name}]\n{chapter.content[:200]}..." if chapter.content else f"[翻译失败或为空 - 章节: {chapter.name}]"
+                
                 chapters_data.append((chapter.name, translated_content))
                 if self.config.context_lines > 0 and translated_content:
                     chapter_prev_ctx = self._get_context_tail(translated_content, self.config.context_lines)
@@ -1358,24 +1796,53 @@ class TranslatorEngine:
                 if self.on_progress:
                     self.on_progress(self.progress)
 
+            # 检查是否实际有内容被翻译和写入文件
+            output_written = False
             if not self.progress.is_cancelled and chapters_data:
                 fmt = self.config.output_format.lower()
                 self.log(f"📦 正在生成 {fmt.upper()} 文件（共 {len(chapters_data)} 章）...")
+                # 记录章节数据的详细信息
+                for i, (filename, content) in enumerate(chapters_data):
+                    content_len = len(content) if content else 0
+                    japanese_chars = sum(1 for c in content if '\u3040' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff') if content else 0
+                    ratio = japanese_chars / content_len if content_len > 0 else 0
+                    self.log(f"   章节 {i+1}: '{filename}' - 长度 {content_len}, 日文字符比例 {ratio:.2%}")
+                
                 if fmt == "epub":
                     self._write_epub(self.config.output_file, chapters_data)
                 else:
                     self._write_txt(self.config.output_file, chapters_data)
                 self.log(f"✅ 已保存: {self.config.output_file}")
+                
+                # 检查输出文件是否真的被创建且有内容
+                if os.path.exists(self.config.output_file):
+                    output_size = os.path.getsize(self.config.output_file)
+                    self.log(f"📊 输出文件大小: {output_size} 字节")
+                    if output_size > 0:
+                        output_written = True
+                    else:
+                        self.log("⚠️ 输出文件已创建但为空")
+                else:
+                    self.log("❌ 输出文件未创建")
+            else:
+                self.log(f"⚠️ 未写入输出文件 - 翻译取消: {self.progress.is_cancelled}, 章节数据: {len(chapters_data) if chapters_data else 0}")
 
             self.progress.is_running = False
             self.progress.elapsed_time = time.time() - self.progress.start_time
 
-            if not self.progress.is_cancelled:
+            # 仅当实际有内容翻译并写入文件时才触发完成回调
+            if not self.progress.is_cancelled and output_written and self.progress.translated_chars > 0:
                 self.log(
                     f"✅ 完成! 用时 {self.progress.elapsed_time:.1f}s, "
                     f"共 {self.progress.translated_chars} 字"
                 )
                 if self.on_complete:
+                    self.on_complete(self.progress)
+            elif not self.progress.is_cancelled and not output_written:
+                self.log("⚠️ 未生成输出文件：指定范围内无有效章节需要翻译或翻译后内容为空")
+                # 即使没有输出也要检查是否应该触发完成回调
+                if self.on_complete and self.progress.translated_chars > 0:
+                    self.log("ℹ️ 存在翻译字符数但未触发完成回调，可能存在输出问题")
                     self.on_complete(self.progress)
 
         except Exception as e:

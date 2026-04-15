@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/cli",
+  "crates/core_engine",
+  "crates/api_client",
+  "crates/api_debug",
+  "crates/epub_pipeline",
+  "crates/correction_retry",
+  "crates/glossary_context",
+  "crates/storage",
+  "crates/bridge",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+authors = ["novel-translator contributors"]
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+zip = "2"
+uuid = { version = "1", features = ["serde", "v4"] }

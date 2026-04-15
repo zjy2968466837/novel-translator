@@ -1,6 +1,12 @@
 [package]
 name = "bridge"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+core_engine = { path = "../core_engine" }
+api_client = { path = "../api_client" }
+serde.workspace = true
+tokio.workspace = true

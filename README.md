@@ -1,213 +1,26 @@
-# 📖 Novel Translator — 日文轻小说 AI 翻译器 (v1.1.0)
+# Novel Translator (Rebuild)
 
-开箱即用（自备 API，推荐使用deepseekv3.2官方api）将日文轻小说（EPUB 格式）翻译为中文，支持 **命令行** 与 **图形界面** 双模式。
+Cross-platform novel translator rebuilt for **Android + Desktop** with Flutter + Rust.
 
-支持多种 AI 提供商：OpenAI 兼容（DeepSeek / Qwen / GPT / SiliconFlow）、Anthropic (Claude)、Google (Gemini)、Ollama 本地模型。
+## Architecture
 
----
+- UI: `apps/flutter_app`
+- CLI: `apps/cli`
+- Core crates: `crates/*`
 
-## 📝 1.1.0 更新说明
+See `docs/architecture.md` for full design and module responsibilities.
 
-- 集成若干界面与内部改进：增强 GUI 对输入文件/参数的便捷设置与章节读取稳定性。
- - 集成若干界面与内部改进：增强 GUI 对输入文件/参数的便捷设置与章节读取稳定性。
- - 修正若干 EPUB 输出与 HTML 处理的边缘情况，改进 ebooklib 兼容性。
- - 增强了 DeepSeek V3.2 的支持
- - 版本号更新为 `1.1.0`。
-
-
-## ✨ 功能特性
-
-| 功能 | 说明 |
-|------|------|
-| 🌐 多提供商 | OpenAI兼容 / Anthropic Claude / Google Gemini / Ollama 本地 |
-| 📗 EPUB 解析 | 自动提取章节、保留图片和样式结构 |
-| 🔄 双模型支持 | Chat 模型 + Completion 模型自动检测 |
-| 📋 整章翻译 | 可选将整章作为一个整体发送，消除跨分块不一致 |
-| 🔗 上下文注入 | 将前文翻译结果注入后续请求，保持人名术语一致 |
-| ⚡ 并发翻译 | 多线程并发加速，支持 1~128 线程 |
-| 💾 断点续传 | 实时保存进度，中断后自动跳过已完成章节 |
-| 📖 术语表 | JSON 格式术语表，强制统一专有名词译名 |
-| 📦 EPUB 输出 | 保留原始 CSS/图片/字体，翻译后样式不丢失 |
-| 🎨 GUI 界面 | 基于 Flet 的现代图形界面，深色/浅色主题自适应 |
-| 🔧 翻译修复 | 质量扫描 + 选择性重翻，修复不一致的译名 |
-
-
----
-
-## � 快速开始（免安装）
-
-**Windows 用户** 可直接下载开箱即用的发行包，无需安装 Python 或任何依赖：
-
-1. 前往 [Releases](https://github.com/zjy2968466837/novel-translator/releases) 页面
-2. 下载最新的 `NovelTranslator-win-x64.zip`（约 60 MB）
-3. 解压到任意目录
-4. 双击 `NovelTranslator.exe` 即可启动 GUI
-
-> 💡 首次启动可能需要数秒加载，请耐心等待窗口出现。
-> 
-> 📋 解压目录下附带了 `glossary_example.json` 示例术语表供参考。
-
----
-
-## 📦 从源码安装
-
-### 环境要求
-
-- Python ≥ 3.10
-- 一个 AI API Key（支持 OpenAI兼容 / Anthropic / Google / Ollama 本地）
-
-### 安装步骤
+## Build
 
 ```bash
-# 克隆项目
-git clone https://github.com/zjy2968466837/novel-translator.git
-cd novel-translator
-
-# 创建虚拟环境（推荐）
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 或以包模式安装（支持 novel-translator 命令）
-pip install -e .
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
----
+> Flutter SDK is required to build the Flutter app in `apps/flutter_app`.
 
-## 🚀 使用方式
+## Provider presets
 
-推荐：我们建议通过 DeepSeek 官方 API 来使用翻译服务（例如模型 `deepseek-ai/DeepSeek-V3.2`）。请使用 DeepSeek 官方文档中提供的端点与 API Key，并通过 `--base-url` 或 GUI 中的 API 基础地址设置为官方端点以获得最佳稳定性与合规性。
-
-### GUI 模式（推荐）
-
-```bash
-python -m novel_translator gui
-```
-
-启动后即可在图形界面中：
-1. 填入 API Key 和选择模型
-2. 选择输入 EPUB 文件
-3. 配置翻译预设和参数
-4. 点击「开始翻译」
-
-### CLI 模式
-
-```bash
-python -m novel_translator translate input.epub \
-  --api-key sk-your-api-key \
-  --model deepseek-ai/DeepSeek-V3.2 \
-  --format epub \
-  --glossary glossary.json \
-  --chunk-size 0 \
-  --context-lines 5
-```
-
-#### 常用参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--api-key` | API Key（必填） | — |
-| `--base-url` | API 地址（建议设置为 DeepSeek 官方端点） | `https://api.siliconflow.cn/v1` |
-| `--model` | 模型名称 | `deepseek-ai/DeepSeek-V3.2` |
-| `--format` | 输出格式 `txt`/`epub` | `txt` |
-| `--glossary` | 术语表 JSON 路径 | — |
-| `--chunk-size` | 分块字符数（0=整章） | `1500` |
-| `--context-lines` | 上下文注入行数 | `5` |
-| `--workers` | 并发线程数 | `1` |
-| `--start` / `--end` | 章节范围 | 全部 |
-| `--no-checkpoint` | 禁用断点续传 | — |
-
----
-
-## 📖 术语表格式
-
-术语表是一个简单的 JSON 文件，键为日文原文，值为中文翻译：
-
-```json
-{
-  "先輩": "学姐",
-  "ダンジョン": "迷宫",
-  "マナ": "魔力素",
-  "スキル": "技能"
-}
-```
-
-翻译时会将术语表注入 System Prompt，确保模型严格遵守译名。
-
-参见 [examples/glossary_example.json](examples/glossary_example.json)。
-
----
-
-## 🏗️ 项目结构
-
-```
-novel-translator/
-├── src/
-│   └── novel_translator/
-│       ├── __init__.py      # 包版本
-│       ├── __main__.py      # python -m 入口
-│       ├── cli.py           # 命令行接口
-│       ├── engine.py        # 翻译引擎核心
-│       └── gui.py           # Flet 图形界面
-├── examples/
-│   └── glossary_example.json
-├── pyproject.toml
-├── requirements.txt
-├── launcher.py              # PyInstaller 打包入口
-├── novel_translator.spec    # PyInstaller 配置
-├── build.bat                # Windows 一键构建脚本
-├── LICENSE
-├── .gitignore
-└── README.md
-```
-
----
-
-## ⚙️ 翻译引擎特性
-
-### 模型类型自动检测
-
-引擎支持 **Chat** 和 **Completion** 两种 API 后端：
-
-- **Chat 模型**（DeepSeek / GPT / Qwen / Claude）：使用 `chat.completions` API + System Prompt
-- **Completion 模型**（base 模型）：使用 `completions` API + Few-shot Prompt
-
-检测优先级：用户指定 → 模型名关键词匹配 → API 探测
-
-### 上下文注入
-
-将上一段翻译结果的最后 N 行注入到下一段的请求中，帮助模型保持人名、称谓的前后一致。
-
-- 串行模式：每个 chunk 带上前一个 chunk 的翻译尾部
-- 并发模式：每个批次的首个 chunk 带上上批末尾的翻译尾部
-
-### 翻译修复
-
-1. **质量扫描**：在断点文件中搜索指定关键词（如 "前辈" "米娅"），定位问题章节
----
-
-## 📦 构建发行包
-
-如需自行构建 Windows 可执行程序：
-
-```bash
-# 方式一：运行构建脚本
-build.bat
-
-# 方式二：手动执行
-pip install pyinstaller
-pyinstaller novel_translator.spec --noconfirm
-```
-
-构建完成后，发行文件位于 `dist/NovelTranslator/` 目录。将该文件夹压缩为 zip 即可分发。
-
----
-
-## 📄 许可证
-
-[MIT License](LICENSE)
+Only two presets are supported:
+- `deepseek_official` (`https://api.deepseek.com`)
+- `openai_compatible` (custom `base_url`)

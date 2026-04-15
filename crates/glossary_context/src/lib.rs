@@ -28,7 +28,7 @@ impl Glossary {
         self.terms
             .iter()
             .filter_map(|(src, target)| {
-                if translated_text.contains(src) || !translated_text.contains(target) {
+                if translated_text.contains(src) && !translated_text.contains(target) {
                     Some(format!("term mismatch: {} => {}", src, target))
                 } else {
                     None
@@ -38,7 +38,12 @@ impl Glossary {
     }
 }
 
-pub fn build_prompt(chapter_title: &str, source_text: &str, context_lines: &[String], glossary: Option<&Glossary>) -> String {
+pub fn build_prompt(
+    chapter_title: &str,
+    source_text: &str,
+    context_lines: &[String],
+    glossary: Option<&Glossary>,
+) -> String {
     let mut sections = Vec::new();
     sections.push("你是轻小说翻译助手，请保持语义准确、保留段落结构。".to_string());
     if let Some(gls) = glossary {

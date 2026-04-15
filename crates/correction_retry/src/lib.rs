@@ -38,7 +38,11 @@ pub struct QualityReport {
     pub checked_at: DateTime<Utc>,
 }
 
-pub fn check_quality(source: &str, translated: &str, glossary_violations: &[String]) -> QualityReport {
+pub fn check_quality(
+    source: &str,
+    translated: &str,
+    glossary_violations: &[String],
+) -> QualityReport {
     let mut issues = Vec::new();
 
     if translated.trim().is_empty() {

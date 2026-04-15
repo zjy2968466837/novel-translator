@@ -7,7 +7,7 @@ use epub_pipeline::{apply_translations, parse_epub, rebuild_epub, validate_outpu
 use glossary_context::{Glossary, build_prompt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use storage::{Storage, TaskState};
+use storage::{ApiLogIndexRecord, Storage, TaskState};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +93,7 @@ impl TranslationEngine {
 
         let mut book = parse_epub(&cfg.input_epub)?;
         let mut translated = Vec::new();
+        let mut context_buffer: Vec<String> = Vec::new();
         let total = book.chapters.len().max(1) as f64;
         let retry_policy = RetryPolicy {
             max_retries: cfg.max_retries,
@@ -102,7 +103,12 @@ impl TranslationEngine {
         for (idx, chapter) in book.chapters.iter().enumerate() {
             let mut attempt: u8 = 0;
             loop {
-                let prompt = build_prompt(&chapter.title, &chapter.html, &[], glossary.as_ref());
+                let prompt = build_prompt(
+                    &chapter.title,
+                    &chapter.html,
+                    &context_buffer,
+                    glossary.as_ref(),
+                );
                 let api_cfg = ApiConfig {
                     provider: cfg.provider.clone(),
                     api_key: cfg.api_key.clone(),
@@ -149,28 +155,49 @@ impl TranslationEngine {
                             created_at: Utc::now(),
                             request: serde_json::json!({"chapter_id": chapter.id, "attempt": attempt}),
                             response: resp.raw.clone(),
-                            error: if report.passed { None } else { Some(report.issues.join("; ")) },
+                            error: if report.passed {
+                                None
+                            } else {
+                                Some(report.issues.join("; "))
+                            },
                         };
 
                         let log_path = self.debug_logger.write_entry(LogLevel::Redacted, entry)?;
-                        self.storage.record_api_log(
-                            &request_id,
-                            &cfg.task_id,
-                            &chapter.id,
-                            resp.status_code,
-                            duration,
-                            resp.usage_tokens,
-                            &log_path,
-                        )?;
+                        self.storage.record_api_log(&ApiLogIndexRecord {
+                            request_id: request_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            chapter_id: chapter.id.clone(),
+                            status_code: resp.status_code,
+                            duration_ms: duration,
+                            usage_tokens: resp.usage_tokens,
+                            log_path,
+                        })?;
 
                         if decision.should_retry {
                             attempt += 1;
-                            self.storage.mark_chapter(&cfg.task_id, &chapter.id, "retrying", attempt)?;
+                            self.storage.mark_chapter(
+                                &cfg.task_id,
+                                &chapter.id,
+                                "retrying",
+                                attempt,
+                            )?;
                             continue;
                         }
 
-                        translated.push((chapter.id.clone(), resp.content));
-                        self.storage.mark_chapter(&cfg.task_id, &chapter.id, "done", attempt)?;
+                        translated.push((chapter.id.clone(), resp.content.clone()));
+                        if cfg.context_lines > 0 {
+                            let lines = resp
+                                .content
+                                .lines()
+                                .map(str::trim)
+                                .filter(|x| !x.is_empty())
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>();
+                            let keep = cfg.context_lines.min(lines.len());
+                            context_buffer = lines[lines.len().saturating_sub(keep)..].to_vec();
+                        }
+                        self.storage
+                            .mark_chapter(&cfg.task_id, &chapter.id, "done", attempt)?;
                         break;
                     }
                     Err(e) => {
@@ -188,27 +215,45 @@ impl TranslationEngine {
                             error: Some(e.to_string()),
                         };
                         let log_path = self.debug_logger.write_entry(LogLevel::Redacted, entry)?;
-                        self.storage.record_api_log(
-                            &request_id,
-                            &cfg.task_id,
-                            &chapter.id,
-                            599,
-                            duration,
-                            None,
-                            &log_path,
-                        )?;
+                        self.storage.record_api_log(&ApiLogIndexRecord {
+                            request_id: request_id.clone(),
+                            task_id: cfg.task_id.clone(),
+                            chapter_id: chapter.id.clone(),
+                            status_code: 599,
+                            duration_ms: duration,
+                            usage_tokens: None,
+                            log_path,
+                        })?;
                         if attempt >= cfg.max_retries {
-                            self.storage.mark_chapter(&cfg.task_id, &chapter.id, "failed", attempt)?;
-                            self.persist_state(&cfg.task_id, TaskStatus::Failed, idx as f64 / total)?;
+                            self.storage.mark_chapter(
+                                &cfg.task_id,
+                                &chapter.id,
+                                "failed",
+                                attempt,
+                            )?;
+                            self.persist_state(
+                                &cfg.task_id,
+                                TaskStatus::Failed,
+                                idx as f64 / total,
+                            )?;
                             return Err(e);
                         }
                         attempt += 1;
-                        self.storage.mark_chapter(&cfg.task_id, &chapter.id, "retrying", attempt)?;
+                        self.storage.mark_chapter(
+                            &cfg.task_id,
+                            &chapter.id,
+                            "retrying",
+                            attempt,
+                        )?;
                     }
                 }
             }
 
-            self.persist_state(&cfg.task_id, TaskStatus::Running, (idx as f64 + 1.0) / total)?;
+            self.persist_state(
+                &cfg.task_id,
+                TaskStatus::Running,
+                (idx as f64 + 1.0) / total,
+            )?;
         }
 
         apply_translations(&mut book, &translated);

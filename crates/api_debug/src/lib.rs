@@ -51,7 +51,11 @@ impl ApiDebugLogger {
             }
         }
 
-        let file_name = format!("{}_{}.json", entry.created_at.timestamp_millis(), entry.request_id);
+        let file_name = format!(
+            "{}_{}.json",
+            entry.created_at.timestamp_millis(),
+            entry.request_id
+        );
         let path = task_dir.join(file_name);
         fs::write(&path, serde_json::to_vec_pretty(&entry)?)?;
         Ok(path)
@@ -71,7 +75,11 @@ impl ApiDebugLogger {
             }
             let mut content = Vec::new();
             File::open(&path)?.read_to_end(&mut content)?;
-            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("entry.json").to_string();
+            let name = path
+                .file_name()
+                .and_then(|x| x.to_str())
+                .unwrap_or("entry.json")
+                .to_string();
             zip.start_file(name, options)?;
             zip.write_all(&content)?;
         }
@@ -113,5 +121,8 @@ fn redact_text(input: &str) -> String {
 }
 
 fn is_sensitive_key(k: &str) -> bool {
-    matches!(k.to_ascii_lowercase().as_str(), "authorization" | "api_key" | "apikey" | "token")
+    matches!(
+        k.to_ascii_lowercase().as_str(),
+        "authorization" | "api_key" | "apikey" | "token"
+    )
 }

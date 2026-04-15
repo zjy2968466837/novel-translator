@@ -17,6 +17,17 @@ pub struct Storage {
     db_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiLogIndexRecord {
+    pub request_id: String,
+    pub task_id: String,
+    pub chapter_id: String,
+    pub status_code: u16,
+    pub duration_ms: u128,
+    pub usage_tokens: Option<u32>,
+    pub log_path: PathBuf,
+}
+
 impl Storage {
     pub fn new(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref().to_path_buf();
@@ -67,7 +78,13 @@ impl Storage {
         Ok(())
     }
 
-    pub fn mark_chapter(&self, task_id: &str, chapter_id: &str, status: &str, retry_count: u8) -> Result<()> {
+    pub fn mark_chapter(
+        &self,
+        task_id: &str,
+        chapter_id: &str,
+        status: &str,
+        retry_count: u8,
+    ) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
             "INSERT INTO chapters(task_id, chapter_id, status, retry_count) VALUES (?1, ?2, ?3, ?4)
@@ -77,29 +94,20 @@ impl Storage {
         Ok(())
     }
 
-    pub fn record_api_log(
-        &self,
-        request_id: &str,
-        task_id: &str,
-        chapter_id: &str,
-        status_code: u16,
-        duration_ms: u128,
-        usage_tokens: Option<u32>,
-        log_path: &Path,
-    ) -> Result<()> {
+    pub fn record_api_log(&self, record: &ApiLogIndexRecord) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
             "INSERT OR REPLACE INTO api_logs(request_id, task_id, chapter_id, status_code, duration_ms, usage_tokens, created_at, log_path)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                request_id,
-                task_id,
-                chapter_id,
-                i64::from(status_code),
-                duration_ms as i64,
-                usage_tokens.map(|x| x as i64),
+                record.request_id,
+                record.task_id,
+                record.chapter_id,
+                i64::from(record.status_code),
+                record.duration_ms as i64,
+                record.usage_tokens.map(|x| x as i64),
                 Utc::now().to_rfc3339(),
-                log_path.to_string_lossy().to_string(),
+                record.log_path.to_string_lossy().to_string(),
             ],
         )?;
         Ok(())
@@ -107,7 +115,8 @@ impl Storage {
 
     pub fn load_task_state(&self, task_id: &str) -> Result<Option<TaskState>> {
         let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare("SELECT task_id, status, progress, updated_at FROM tasks WHERE task_id=?1")?;
+        let mut stmt = conn
+            .prepare("SELECT task_id, status, progress, updated_at FROM tasks WHERE task_id=?1")?;
         let mut rows = stmt.query(params![task_id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(TaskState {

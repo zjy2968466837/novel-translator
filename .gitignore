@@ -65,3 +65,13 @@ mcp_host.json
 audit_*.json
 audit_*.txt
 scripts/*_result.txt
+
+# Rust
+target/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+**/build/

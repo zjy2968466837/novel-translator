@@ -67,8 +67,13 @@ impl ApiClient {
         Ok(Self { http })
     }
 
-    pub async fn call_chat_completion(&self, cfg: &ApiConfig, req: &ApiRequest) -> Result<ApiResponse> {
-        if matches!(cfg.provider, ProviderKind::OpenAiCompatible) && cfg.base_url.trim().is_empty() {
+    pub async fn call_chat_completion(
+        &self,
+        cfg: &ApiConfig,
+        req: &ApiRequest,
+    ) -> Result<ApiResponse> {
+        if matches!(cfg.provider, ProviderKind::OpenAiCompatible) && cfg.base_url.trim().is_empty()
+        {
             bail!("openai_compatible provider requires base_url");
         }
 
@@ -102,13 +107,19 @@ impl ApiClient {
             match resp {
                 Ok(r) if r.status().is_success() => {
                     let status = r.status().as_u16();
-                    let json: serde_json::Value = r.json().await.context("failed to parse api response json")?;
+                    let json: serde_json::Value = r
+                        .json()
+                        .await
+                        .context("failed to parse api response json")?;
                     let content = json
                         .pointer("/choices/0/message/content")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    let usage = json.pointer("/usage/total_tokens").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let usage = json
+                        .pointer("/usage/total_tokens")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32);
                     return Ok(ApiResponse {
                         content,
                         status_code: status,
@@ -130,7 +141,12 @@ impl ApiClient {
                     attempt += 1;
                     let backoff = 2u64.pow(attempt as u32);
                     sleep(Duration::from_secs(backoff)).await;
-                    tracing::warn!(error = %e, attempt, "retrying api request");
+                    tracing::warn!(
+                        error = %e,
+                        attempt,
+                        chapter_id = %req.chapter_id,
+                        "retrying api request"
+                    );
                 }
                 Err(e) => return Err(e).context("api request failed without retry left"),
             }

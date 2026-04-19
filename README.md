@@ -2,6 +2,8 @@
 
 Cross-platform novel translator rebuilt for **Android + Desktop** with Flutter + Rust.
 
+- 中文说明：`README.zh-CN.md`
+
 ## Architecture
 
 - UI: `apps/flutter_app`

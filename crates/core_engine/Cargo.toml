@@ -1,0 +1,19 @@
+[package]
+name = "core_engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+api_client = { path = "../api_client" }
+api_debug = { path = "../api_debug" }
+epub_pipeline = { path = "../epub_pipeline" }
+correction_retry = { path = "../correction_retry" }
+glossary_context = { path = "../glossary_context" }
+storage = { path = "../storage" }
+tokio.workspace = true

@@ -1,0 +1,24 @@
+{
+  "providers": [
+    {
+      "key": "deepseek_official",
+      "name": "DeepSeek Official",
+      "base_url": "https://api.deepseek.com"
+    },
+    {
+      "key": "openai_compatible",
+      "name": "OpenAI Compatible",
+      "base_url": ""
+    }
+  ],
+  "config_fields": [
+    "api_key",
+    "base_url",
+    "model",
+    "timeout",
+    "max_retries",
+    "temperature",
+    "top_p",
+    "max_tokens"
+  ]
+}
